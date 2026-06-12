@@ -1,0 +1,1208 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simeria Terrain Prototype</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #1f1b16;
+        color: #eadfcf;
+        font-family: system-ui, sans-serif;
+      }
+
+      main {
+        text-align: center;
+      }
+
+      #tile-info {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        padding: 8px 10px;
+        min-width: 190px;
+        border: 1px solid #6f5738;
+        border-radius: 4px;
+        background: rgba(31, 27, 22, 0.88);
+        color: #eadfcf;
+        font-size: 14px;
+        line-height: 1.35;
+        text-align: left;
+        pointer-events: none;
+      }
+
+      #scale-legend {
+        position: fixed;
+        right: 12px;
+        bottom: 12px;
+        padding: 8px 10px;
+        border: 1px solid #6f5738;
+        border-radius: 4px;
+        background: rgba(31, 27, 22, 0.88);
+        color: #eadfcf;
+        font-size: 13px;
+        line-height: 1.35;
+        text-align: left;
+      }
+
+      main label {
+        display: block;
+        margin-bottom: 10px;
+        font-size: 14px;
+      }
+
+      #clock-controls {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 10px;
+        margin: 10px 0;
+        font-size: 14px;
+      }
+
+      #clock-controls button {
+        border: 1px solid #6f5738;
+        border-radius: 4px;
+        background: #3a2f24;
+        color: #eadfcf;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+
+      #clock-controls button:hover {
+        background: #4b3b2a;
+      }
+
+      #clock-readout {
+        min-width: 210px;
+        text-align: left;
+      }
+
+      canvas {
+        image-rendering: pixelated;
+        border: 2px solid #6f5738;
+        background: #b98f54;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="tile-info">Hover over the map</div>
+    <div id="scale-legend">
+      <strong>Scale</strong><br />
+      <span id="tile-scale"></span><br />
+      <span id="world-scale"></span><br />
+      <span id="render-scale"></span>
+    </div>
+
+    <main>
+      <h1>Simeria</h1>
+      <p>256×256 initial terrain: river-fed floodplain, fertile silt, and dry scrub</p>
+      <div id="clock-controls">
+        <button id="play-year" type="button">Play</button>
+        <button id="step-day" type="button">Step Day</button>
+        <div id="clock-readout"></div>
+      </div>
+      <label><input type="checkbox" id="ponding-overlay" /> Show ponding overlay (where water can't drain)</label>
+      <canvas id="world"></canvas>
+    </main>
+
+    <script>
+      const WORLD_WIDTH = 256;
+      const WORLD_HEIGHT = 256;
+      const TILE_METERS = 10;
+      const TILE_SIZE = 3;
+
+      // The one physical datum the whole world is measured against. Land
+      // below it that connects to a map edge is open sea; land hovering just
+      // above it is where the marshes live.
+      const SEA_LEVEL = 0.42;
+
+      const canvas = document.getElementById("world");
+      const ctx = canvas.getContext("2d");
+      const tileInfo = document.getElementById("tile-info");
+      const pondingOverlay = document.getElementById("ponding-overlay");
+      const playYearButton = document.getElementById("play-year");
+      const stepDayButton = document.getElementById("step-day");
+      const clockReadout = document.getElementById("clock-readout");
+      const tileScale = document.getElementById("tile-scale");
+      const worldScale = document.getElementById("world-scale");
+      const renderScale = document.getElementById("render-scale");
+      pondingOverlay.addEventListener("change", () => renderWorld());
+      playYearButton.addEventListener("click", () => setYearPlaying(!yearClock.playing));
+      stepDayButton.addEventListener("click", () => advanceDay());
+
+      canvas.width = WORLD_WIDTH * TILE_SIZE;
+      canvas.height = WORLD_HEIGHT * TILE_SIZE;
+
+      tileScale.textContent = `1 terrain tile = ${TILE_METERS}m × ${TILE_METERS}m`;
+      worldScale.textContent = `World = ${(WORLD_WIDTH * TILE_METERS / 1000).toFixed(2)}km × ${(WORLD_HEIGHT * TILE_METERS / 1000).toFixed(2)}km`;
+      renderScale.textContent = `Rendered tile = ${TILE_SIZE}px × ${TILE_SIZE}px`;
+
+      const world = {
+        width: WORLD_WIDTH,
+        height: WORLD_HEIGHT,
+        tiles: [],
+      };
+
+      function seededRandom(seed) {
+        let value = seed;
+
+        return function random() {
+          value = (value * 1664525 + 1013904223) >>> 0;
+          return value / 4294967296;
+        };
+      }
+
+      const random = seededRandom(1337);
+      let hoveredTilePosition = null;
+
+      const yearClock = {
+        day: 0,
+        playing: false,
+        ticksPerSecond: 20,
+        intervalId: null,
+      };
+
+      const MONTHS = [
+        { name: "Jan", days: 31 },
+        { name: "Feb", days: 28 },
+        { name: "Mar", days: 31 },
+        { name: "Apr", days: 30 },
+        { name: "May", days: 31 },
+        { name: "Jun", days: 30 },
+        { name: "Jul", days: 31 },
+        { name: "Aug", days: 31 },
+        { name: "Sep", days: 30 },
+        { name: "Oct", days: 31 },
+        { name: "Nov", days: 30 },
+        { name: "Dec", days: 31 },
+      ];
+
+      // Southern Mesopotamia: low local rain, spring snowmelt flood pulse,
+      // extreme summer evaporation. These force the climate; terrain and
+      // the surface-water layer decide where water actually goes.
+      const MONTHLY_RIVER_FLOW = [2.0, 3.0, 6.0, 10.0, 9.0, 4.0, 2.0, 1.2, 1.0, 1.0, 1.3, 1.7];
+      const MONTHLY_RAIN = [1.0, 0.9, 0.8, 0.5, 0.15, 0.0, 0.0, 0.0, 0.0, 0.15, 0.5, 0.9];
+      const MONTHLY_EVAPORATION = [0.2, 0.3, 0.45, 0.7, 1.0, 1.4, 1.8, 1.8, 1.4, 0.9, 0.45, 0.25];
+
+      const WATER_MOVEMENT_PASSES = 6;
+      const RAIN_TO_SURFACE_WATER = 0.00006;
+      const RIVER_STAGE_PER_FLOW = 0.008;
+      const SURFACE_EVAPORATION = 0.00028;
+      const SURFACE_ABSORPTION = 0.00022;
+      const SURFACE_WATER_VISIBLE_DEPTH = 0.00035;
+      const FLOODED_SURFACE_WATER_DEPTH = 0.002;
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function dateForDay(dayOfYear) {
+        let remaining = dayOfYear;
+        for (const month of MONTHS) {
+          if (remaining < month.days) {
+            return { month: month.name, day: remaining + 1 };
+          }
+          remaining -= month.days;
+        }
+        return { month: "Dec", day: 31 };
+      }
+
+      function seasonForDay(dayOfYear) {
+        if (dayOfYear < 59) return "Winter lowlands rain";
+        if (dayOfYear < 151) return "Spring river rise";
+        if (dayOfYear < 243) return "Hot dry season";
+        if (dayOfYear < 304) return "Autumn low water";
+        return "Winter rains return";
+      }
+
+      function monthIndexAndProgressForDay(dayOfYear) {
+        let remaining = dayOfYear;
+        for (let i = 0; i < MONTHS.length; i++) {
+          const month = MONTHS[i];
+          if (remaining < month.days) {
+            return { index: i, progress: remaining / month.days };
+          }
+          remaining -= month.days;
+        }
+        return { index: 11, progress: 1 };
+      }
+
+      function seasonalValueForDay(dayOfYear, monthlyValues) {
+        const { index, progress } = monthIndexAndProgressForDay(dayOfYear);
+        const current = monthlyValues[index];
+        const next = monthlyValues[(index + 1) % monthlyValues.length];
+        return lerp(current, next, smoothstep(progress));
+      }
+
+      function riverFlowForDay(dayOfYear) {
+        return seasonalValueForDay(dayOfYear, MONTHLY_RIVER_FLOW);
+      }
+
+      function rainfallForDay(dayOfYear) {
+        return seasonalValueForDay(dayOfYear, MONTHLY_RAIN);
+      }
+
+      function evaporationForDay(dayOfYear) {
+        return seasonalValueForDay(dayOfYear, MONTHLY_EVAPORATION);
+      }
+
+      function updateClockReadout() {
+        const date = dateForDay(yearClock.day);
+        const river = riverFlowForDay(yearClock.day).toFixed(1);
+        const rain = rainfallForDay(yearClock.day).toFixed(2);
+        const evaporation = evaporationForDay(yearClock.day).toFixed(2);
+        const stats = seasonalWaterStats();
+        clockReadout.innerHTML = `
+          Day ${yearClock.day + 1}/365 — ${date.month} ${date.day} — ${seasonForDay(yearClock.day)}<br />
+          River: ${river}× · Rain: ${rain} · Evap: ${evaporation} · Flooded: ${stats.floodedTiles} · Max SW: ${stats.maxSurfaceWater.toFixed(3)}
+        `;
+      }
+
+      function advanceDay() {
+        yearClock.day = (yearClock.day + 1) % 365;
+        simulateSeasonalWaterDay(yearClock.day);
+        updateClockReadout();
+        renderWorld();
+        updateHoveredTileInfo();
+      }
+
+      function setYearPlaying(playing) {
+        yearClock.playing = playing;
+        playYearButton.textContent = playing ? "Pause" : "Play";
+
+        if (yearClock.intervalId !== null) {
+          clearInterval(yearClock.intervalId);
+          yearClock.intervalId = null;
+        }
+
+        if (playing) {
+          yearClock.intervalId = setInterval(advanceDay, 1000 / yearClock.ticksPerSecond);
+        }
+      }
+
+      function lerp(a, b, t) {
+        return a + (b - a) * t;
+      }
+
+      function smoothstep(t) {
+        return t * t * (3 - 2 * t);
+      }
+
+      function hashNoise(x, y) {
+        let n = (Math.imul(x, 374761393) + Math.imul(y, 668265263)) | 0;
+        n = Math.imul(n ^ (n >>> 13), 1274126177);
+        n = n ^ (n >>> 16);
+        return (n >>> 0) / 4294967296;
+      }
+
+      function valueNoise(x, y, scale) {
+        const cellX = Math.floor(x / scale);
+        const cellY = Math.floor(y / scale);
+        const localX = smoothstep((x % scale) / scale);
+        const localY = smoothstep((y % scale) / scale);
+
+        const top = lerp(
+          hashNoise(cellX, cellY),
+          hashNoise(cellX + 1, cellY),
+          localX
+        );
+        const bottom = lerp(
+          hashNoise(cellX, cellY + 1),
+          hashNoise(cellX + 1, cellY + 1),
+          localX
+        );
+
+        return lerp(top, bottom, localY);
+      }
+
+      function layeredNoise(x, y) {
+        return (
+          valueNoise(x, y, 64) * 0.55 +
+          valueNoise(x, y, 32) * 0.3 +
+          valueNoise(x, y, 16) * 0.15
+        );
+      }
+
+      function tileIndex(x, y) {
+        return y * world.width + x;
+      }
+
+      function getTile(x, y) {
+        if (x < 0 || x >= world.width || y < 0 || y >= world.height) {
+          return null;
+        }
+
+        return world.tiles[tileIndex(x, y)];
+      }
+
+      function generateElevation(x, y) {
+        const southness = y / (world.height - 1);
+        const noise = layeredNoise(x, y) - 0.5;
+
+        // Concave north-to-south profile: steeper off the alluvial fans in
+        // the north, flattening asymptotically as it approaches the sea.
+        // Near the coast the regional slope sinks below the noise amplitude,
+        // so noise decides what is sea, marsh, or island — the interfingered
+        // delta coastline emerges from that crossover, not from any rule.
+        const profile = Math.pow(1 - southness, 1.75) * 0.16;
+
+        return SEA_LEVEL - 0.01 + profile + noise * 0.045;
+      }
+
+      const NEIGHBORS_8 = [
+        [-1, -1], [0, -1], [1, -1],
+        [-1, 0], [1, 0],
+        [-1, 1], [0, 1], [1, 1],
+      ];
+
+      const NEIGHBORS_4 = [
+        [0, -1], [0, 1], [-1, 0], [1, 0],
+      ];
+
+      function seasonalWaterStats() {
+        let floodedTiles = 0;
+        let wetTiles = 0;
+        let maxSurfaceWater = 0;
+
+        for (const tile of world.tiles) {
+          if (tile.terrain === "river" || isOpenSeaSink(tile)) continue;
+          maxSurfaceWater = Math.max(maxSurfaceWater, tile.surfaceWater);
+          if (tile.surfaceWater > SURFACE_WATER_VISIBLE_DEPTH) wetTiles++;
+          if (tile.surfaceWater > FLOODED_SURFACE_WATER_DEPTH) floodedTiles++;
+        }
+
+        return { floodedTiles, wetTiles, maxSurfaceWater };
+      }
+
+      function isOpenSeaSink(tile) {
+        return tile.distanceToSea === 0 && tile.waterSurface <= SEA_LEVEL + 0.0005;
+      }
+
+      function seasonalBaseLevel(tile) {
+        // Dynamic water moves over the currently visible wet surface: dry
+        // land uses ground elevation, marsh/pond/sea uses the standing-water
+        // surface established by worldgen.
+        return tile.pondingDepth > 0 ? tile.waterSurface : tile.elevation;
+      }
+
+      function seasonalWaterLevel(tile) {
+        return seasonalBaseLevel(tile) + tile.surfaceWater;
+      }
+
+      function applySeasonalForcing(dayOfYear) {
+        const riverMultiplier = riverFlowForDay(dayOfYear);
+        const rainfall = rainfallForDay(dayOfYear);
+        const area = world.width * world.height;
+        const rainDepth = rainfall * RAIN_TO_SURFACE_WATER;
+
+        for (const tile of world.tiles) {
+          tile.riverStage = 0;
+
+          if (!isOpenSeaSink(tile) && tile.terrain !== "river") {
+            // Local rain is small in the southern alluvium, but it still
+            // contributes a shallow film that will either drain, pond, or
+            // evaporate depending on the tile's local position.
+            tile.surfaceWater += rainDepth;
+          }
+
+          if (tile.terrain === "river") {
+            // River stage is the seasonal height above the normal filled
+            // channel surface. The only authored seasonal input is upstream
+            // discharge; overbank flooding is decided by whether this water
+            // level overtops the neighboring terrain.
+            const channelStrength = clamp(Math.sqrt(tile.flow / (area * 0.6)), 0.25, 1.2);
+            tile.riverStage = (0.006 + riverMultiplier * RIVER_STAGE_PER_FLOW) * channelStrength;
+            tile.surfaceWater = tile.riverStage;
+          }
+        }
+      }
+
+      function moveSeasonalSurfaceWater() {
+        const deltas = new Float32Array(world.tiles.length);
+
+        for (let pass = 0; pass < WATER_MOVEMENT_PASSES; pass++) {
+          deltas.fill(0);
+
+          for (const tile of world.tiles) {
+            if (tile.surfaceWater <= 0.00001) continue;
+
+            const tileLevel = seasonalWaterLevel(tile);
+            const lower = [];
+            let totalDrop = 0;
+
+            for (const [dx, dy] of NEIGHBORS_8) {
+              const neighbor = getTile(tile.x + dx, tile.y + dy);
+              if (!neighbor) continue;
+
+              const drop = tileLevel - seasonalWaterLevel(neighbor);
+              if (drop <= 0.00002) continue;
+              const weightedDrop = drop / Math.sqrt(dx * dx + dy * dy);
+              lower.push({ neighbor, drop: weightedDrop });
+              totalDrop += weightedDrop;
+            }
+
+            if (lower.length === 0) continue;
+
+            const spillFraction = tile.terrain === "river" ? 0.65 : 0.45;
+            const slopeFraction = tile.terrain === "river" ? 0.35 : 0.18;
+            const transferable = Math.min(tile.surfaceWater * spillFraction, totalDrop * slopeFraction);
+            if (transferable <= 0) continue;
+
+            const fromIndex = tileIndex(tile.x, tile.y);
+            deltas[fromIndex] -= transferable;
+
+            for (const option of lower) {
+              const toIndex = tileIndex(option.neighbor.x, option.neighbor.y);
+              deltas[toIndex] += transferable * (option.drop / totalDrop);
+            }
+          }
+
+          for (let i = 0; i < world.tiles.length; i++) {
+            const tile = world.tiles[i];
+            tile.surfaceWater = Math.max(0, tile.surfaceWater + deltas[i]);
+            if (tile.terrain === "river") {
+              // The river is a boundary source fed from off-map: spilling to
+              // the floodplain should not exhaust the upstream snowmelt pulse
+              // within a single relaxation pass.
+              tile.surfaceWater = Math.max(tile.surfaceWater, tile.riverStage);
+            }
+          }
+        }
+      }
+
+      function infiltrateAndEvaporateSeasonalWater(dayOfYear) {
+        const evaporation = evaporationForDay(dayOfYear);
+
+        for (const tile of world.tiles) {
+          if (isOpenSeaSink(tile)) {
+            tile.surfaceWater = 0;
+            tile.riverStage = 0;
+            continue;
+          }
+
+          if (tile.terrain === "river") {
+            tile.surfaceWater = tile.riverStage;
+            continue;
+          }
+
+          if (tile.surfaceWater > 0) {
+            // This removes temporary standing water without changing soilWater
+            // yet. Some water soaks away or drains below the surface; the rest
+            // is exposed to the seasonal evaporation curve.
+            const saturatedGround = clamp(tile.pondingDepth / 0.012, 0, 0.8);
+            const absorption = Math.min(tile.surfaceWater, SURFACE_ABSORPTION * (1 - saturatedGround));
+            tile.surfaceWater = Math.max(0, tile.surfaceWater - absorption);
+            tile.surfaceWater = Math.max(0, tile.surfaceWater - SURFACE_EVAPORATION * evaporation);
+          }
+        }
+      }
+
+      function simulateSeasonalWaterDay(dayOfYear) {
+        applySeasonalForcing(dayOfYear);
+        moveSeasonalSurfaceWater();
+        infiltrateAndEvaporateSeasonalWater(dayOfYear);
+      }
+
+      function routeFlow() {
+        // Every tile receives rain (more in the north, toward the mountain
+        // sources), and the lowest tile on the northern edge receives the
+        // discharge of the vast catchment beyond the map — the Euphrates
+        // entering Sumer. From there, water simply follows the filled
+        // surface downhill; the river is wherever a lot of it ends up.
+        const area = world.width * world.height;
+
+        for (const tile of world.tiles) {
+          const southness = tile.y / (world.height - 1);
+          tile.flow = 0.4 + (1 - southness) * 0.8;
+        }
+
+        let inlet = null;
+        const inletMinX = Math.floor(world.width * 0.35);
+        const inletMaxX = Math.floor(world.width * 0.65);
+        for (let x = inletMinX; x <= inletMaxX; x++) {
+          const tile = getTile(x, 0);
+          if (!inlet || tile.waterSurface < inlet.waterSurface) inlet = tile;
+        }
+        inlet.flow += area * 0.6;
+
+        const order = [...world.tiles].sort((a, b) => b.waterSurface - a.waterSurface);
+
+        for (const tile of order) {
+          // Collect every strictly-downhill neighbor. On the filled surface
+          // there are no pits, so any downhill move eventually reaches an
+          // edge — which lets us choose among them randomly (weighted by
+          // slope) instead of always taking the steepest. That stochastic
+          // choice is what makes the channel meander rather than running
+          // straight down the regional gradient.
+          const downhill = [];
+          let totalWeight = 0;
+          let steepest = 0;
+
+          for (const [dx, dy] of NEIGHBORS_8) {
+            const neighbor = getTile(tile.x + dx, tile.y + dy);
+            if (!neighbor || neighbor.waterSurface >= tile.waterSurface) continue;
+
+            const slope = (tile.waterSurface - neighbor.waterSurface) / Math.sqrt(dx * dx + dy * dy);
+            const weight = slope * slope;
+            downhill.push({ neighbor, slope, weight });
+            totalWeight += weight;
+            if (slope > steepest) steepest = slope;
+          }
+
+          if (downhill.length === 0) continue; // map-edge outlet: water leaves the world
+
+          let pick = random() * totalWeight;
+          let chosen = downhill[downhill.length - 1];
+          for (const option of downhill) {
+            pick -= option.weight;
+            if (pick <= 0) {
+              chosen = option;
+              break;
+            }
+          }
+
+          // On near-flat ground the channel can no longer hold all its water
+          // to one path. Splitting some flow to a second downhill neighbor is
+          // what makes distributaries emerge in the delta; the noise gate
+          // keeps bifurcations discrete instead of smearing into sheet flow.
+          // Only a channel carrying real discharge can split; small streams
+          // stay coherent. Without this, the flat delta shreds the river
+          // into sheet flow that never reaches the sea.
+          const nearlyFlat = steepest < 0.0005 && tile.flow > area * 0.02;
+          const alternates = downhill.filter((option) => option !== chosen);
+          if (
+            nearlyFlat &&
+            alternates.length > 0 &&
+            valueNoise(tile.x + 5000, tile.y + 5000, 17) > 0.58
+          ) {
+            const second = alternates[Math.floor(random() * alternates.length)];
+            chosen.neighbor.flow += tile.flow * 0.65;
+            second.neighbor.flow += tile.flow * 0.35;
+          } else {
+            chosen.neighbor.flow += tile.flow;
+          }
+        }
+      }
+
+      function carveRivers() {
+        // Channel width grows with discharge. The threshold scales with map
+        // area so the same fraction of catchment makes a river at any size.
+        const area = world.width * world.height;
+        const riverThreshold = area * 0.02;
+        const riverTiles = world.tiles.filter((tile) => tile.flow > riverThreshold);
+
+        // Levee deposits are collected first and applied once per bank tile,
+        // so levee height reflects the largest adjacent channel — not how
+        // many overlapping carve-rings happened to touch the tile.
+        const leveeDeposit = new Map();
+
+        for (const tile of riverTiles) {
+          // Past the coastline the channel dissolves into the sea — no
+          // carving, no banks. The river ends where the ocean begins.
+          if (tile.waterSurface <= SEA_LEVEL + 0.0005) continue;
+
+          const dischargeScale = Math.sqrt(tile.flow / (area * 0.6));
+          const riverWidth = Math.max(1, Math.round(dischargeScale * (2.4 + valueNoise(tile.x, tile.y, 24) * 1.4)));
+          const leveeDistance = riverWidth + 2;
+
+          // The bed sits just below the water surface the routing computed,
+          // so the channel keeps its downstream gradient instead of
+          // bottoming out at a flat constant.
+          const bedElevation = tile.waterSurface - (0.018 + dischargeScale * 0.02);
+
+          for (let dy = -leveeDistance; dy <= leveeDistance; dy++) {
+            for (let dx = -leveeDistance; dx <= leveeDistance; dx++) {
+              const target = getTile(tile.x + dx, tile.y + dy);
+              if (!target) continue;
+
+              const distance = Math.sqrt(dx * dx + dy * dy);
+
+              if (distance <= riverWidth) {
+                target.terrain = "river";
+                target.elevation = Math.min(target.elevation, bedElevation);
+              } else if (distance <= leveeDistance) {
+                const deposit = 0.012 + dischargeScale * 0.016;
+                if (deposit > (leveeDeposit.get(target) ?? 0)) {
+                  leveeDeposit.set(target, deposit);
+                }
+              }
+            }
+          }
+        }
+
+        for (const [target, deposit] of leveeDeposit) {
+          // Sediment can't build banks underwater — no levee causeways
+          // marching across the gulf.
+          if (target.terrain === "river" || target.waterSurface <= SEA_LEVEL + 0.0005) continue;
+          target.elevation += deposit;
+        }
+      }
+
+      function computeRiverDistances() {
+        // Multi-source BFS from every river tile (8-connected, so the result
+        // is Chebyshev distance) — much faster than checking each tile
+        // against every river point.
+        const queue = [];
+
+        for (const tile of world.tiles) {
+          if (tile.terrain === "river") {
+            tile.distanceToRiver = 0;
+            queue.push(tile);
+          } else {
+            tile.distanceToRiver = Infinity;
+          }
+        }
+
+        let head = 0;
+        while (head < queue.length) {
+          const tile = queue[head++];
+
+          for (const [dx, dy] of NEIGHBORS_8) {
+            const neighbor = getTile(tile.x + dx, tile.y + dy);
+            if (!neighbor || neighbor.distanceToRiver !== Infinity) continue;
+            neighbor.distanceToRiver = tile.distanceToRiver + 1;
+            queue.push(neighbor);
+          }
+        }
+      }
+
+      function computeSeaDistances() {
+        // Multi-source BFS from every open-sea tile (water at exactly sea
+        // level, connected to the world ocean). Distance feeds the marine
+        // salt intrusion: seawater creeps inland through the groundwater.
+        const queue = [];
+
+        for (const tile of world.tiles) {
+          if (tile.pondingDepth > 0 && tile.waterSurface <= SEA_LEVEL + 0.0005) {
+            tile.distanceToSea = 0;
+            queue.push(tile);
+          } else {
+            tile.distanceToSea = Infinity;
+          }
+        }
+
+        let head = 0;
+        while (head < queue.length) {
+          const tile = queue[head++];
+
+          for (const [dx, dy] of NEIGHBORS_8) {
+            const neighbor = getTile(tile.x + dx, tile.y + dy);
+            if (!neighbor || neighbor.distanceToSea !== Infinity) continue;
+            neighbor.distanceToSea = tile.distanceToSea + 1;
+            queue.push(neighbor);
+          }
+        }
+      }
+
+      function computePlumes() {
+        // Rivers don't stop being fresh at the coastline: their discharge
+        // spreads into the sea as a freshwater plume, and a plume's reach
+        // scales with the channel's actual discharge — a major distributary
+        // freshens a whole bay, a minor creek barely dents the ocean. Each
+        // mouth seeds the water with a "reach budget" proportional to its
+        // flow; the budget decays one tile per step and the strongest plume
+        // wins where they overlap.
+        const area = world.width * world.height;
+        const maxReach = world.height * 0.1;
+        const queue = [];
+
+        for (const tile of world.tiles) {
+          tile.plumeReach = 0;
+          if (tile.distanceToSea !== 0) continue;
+
+          let mouthFlow = 0;
+          for (const [dx, dy] of NEIGHBORS_8) {
+            const neighbor = getTile(tile.x + dx, tile.y + dy);
+            if (neighbor && neighbor.terrain === "river") {
+              mouthFlow = Math.max(mouthFlow, neighbor.flow);
+            }
+          }
+          if (mouthFlow === 0) continue;
+
+          tile.plumeReach = maxReach * clamp(Math.sqrt(mouthFlow / (area * 0.6)), 0.1, 1);
+          queue.push(tile);
+        }
+
+        let head = 0;
+        while (head < queue.length) {
+          const tile = queue[head++];
+
+          for (const [dx, dy] of NEIGHBORS_8) {
+            const neighbor = getTile(tile.x + dx, tile.y + dy);
+            if (!neighbor || neighbor.distanceToSea !== 0) continue;
+            const carried = tile.plumeReach - 1;
+            if (carried <= neighbor.plumeReach) continue;
+            neighbor.plumeReach = carried;
+            queue.push(neighbor);
+          }
+        }
+      }
+
+      function computeSalinity() {
+        // Salt rides with water and stays behind when water evaporates.
+        // Three sources, one sink — all read from the hydrology:
+        //   marine    — seawater intruding through coastal groundwater,
+        //               pushed back by the freshwater head of higher ground
+        //   basin     — inland ponds drain only by evaporation, so their
+        //               salts concentrate (terminal lakes turn to brine)
+        //   capillary — where the water table is shallow but nothing flushes
+        //               it, evaporation wicks salt to the surface; this is
+        //               the belt that ruined Sumer's wheat fields
+        //   flushing  — moving fresh water exports salt to the sea
+        computeSeaDistances();
+        computePlumes();
+        const area = world.width * world.height;
+
+        for (const tile of world.tiles) {
+          if (tile.terrain === "river") {
+            // Tidal salt wedge: the sea pushes brackish water up the lowest
+            // river reaches (the real Shatt al-Arab is salty far inland).
+            // Above the wedge the river runs fresh, carrying only its
+            // natural dissolved load.
+            const wedge = Math.pow(1 - clamp(tile.distanceToSea / (world.height * 0.05), 0, 1), 2);
+            tile.salinity = clamp(0.02 + wedge * 0.55, 0, 1);
+            continue;
+          }
+
+          if (tile.distanceToSea === 0) {
+            // Estuarine mixing: full ocean salinity offshore, freshened
+            // toward each river mouth by the discharge plume. The head of
+            // the gulf is brackish exactly where the channels feed it.
+            const freshening = Math.pow(clamp(tile.plumeReach / (world.height * 0.1), 0, 1), 1.5);
+            tile.salinity = clamp(1 - freshening * 0.8, 0, 1);
+            continue;
+          }
+
+          const streamflow = clamp(tile.flow / (area * 0.015), 0, 1);
+          const channelProximity = Math.pow(1 - clamp(tile.distanceToRiver / (world.height * 0.08), 0, 1), 2);
+          const flush = clamp(streamflow + channelProximity, 0, 1);
+
+          const reach = clamp(tile.distanceToSea / (world.height * 0.05), 0, 1);
+          const head = 1 - clamp((tile.elevation - SEA_LEVEL) / 0.018, 0, 1);
+          const marine = Math.pow(1 - reach, 2) * head;
+
+          const inlandPond = tile.waterSurface > SEA_LEVEL + 0.0005;
+          const basin = inlandPond ? clamp(tile.pondingDepth / 0.012, 0, 1) * 0.8 : 0;
+
+          const waterTable = Math.pow(1 - clamp(tile.distanceToRiver / (world.height * 0.18), 0, 1), 1.6);
+          const capillary = waterTable * 0.5;
+
+          const salinityNoise = (layeredNoise(tile.x + 2700, tile.y + 2700) - 0.5) * 0.1;
+
+          tile.salinity = clamp((marine + basin + capillary) * (1 - flush * 0.9) + salinityNoise, 0, 1);
+        }
+      }
+
+      function fillDepressions() {
+        // Priority-flood: walk inward from the map edges, always processing
+        // the lowest-known tile first. Any neighbor lower than the tile we
+        // arrived from sits in a pit — water there could only escape by
+        // rising to our level, so its water surface is raised to match.
+        const heap = [];
+
+        function heapPush(item) {
+          heap.push(item);
+          let i = heap.length - 1;
+          while (i > 0) {
+            const parent = (i - 1) >> 1;
+            if (heap[parent].level <= heap[i].level) break;
+            [heap[parent], heap[i]] = [heap[i], heap[parent]];
+            i = parent;
+          }
+        }
+
+        function heapPop() {
+          const top = heap[0];
+          const last = heap.pop();
+          if (heap.length > 0) {
+            heap[0] = last;
+            let i = 0;
+            while (true) {
+              const left = i * 2 + 1;
+              const right = left + 1;
+              let smallest = i;
+              if (left < heap.length && heap[left].level < heap[smallest].level) smallest = left;
+              if (right < heap.length && heap[right].level < heap[smallest].level) smallest = right;
+              if (smallest === i) break;
+              [heap[i], heap[smallest]] = [heap[smallest], heap[i]];
+              i = smallest;
+            }
+          }
+          return top;
+        }
+
+        const visited = new Uint8Array(world.width * world.height);
+
+        // Every map edge connects to the world ocean: an edge tile below sea
+        // level is flooded to sea level, and the flood spreads inland from
+        // there. Which edges become coastline is decided entirely by where
+        // the terrain dips under the sea — nothing names the south.
+        for (let x = 0; x < world.width; x++) {
+          for (const y of [0, world.height - 1]) {
+            const index = y * world.width + x;
+            if (!visited[index]) {
+              visited[index] = 1;
+              heapPush({ x, y, level: Math.max(world.tiles[index].elevation, SEA_LEVEL) });
+            }
+          }
+        }
+        for (let y = 0; y < world.height; y++) {
+          for (const x of [0, world.width - 1]) {
+            const index = y * world.width + x;
+            if (!visited[index]) {
+              visited[index] = 1;
+              heapPush({ x, y, level: Math.max(world.tiles[index].elevation, SEA_LEVEL) });
+            }
+          }
+        }
+
+        while (heap.length > 0) {
+          const current = heapPop();
+          const tile = getTile(current.x, current.y);
+          tile.waterSurface = current.level;
+          tile.pondingDepth = current.level - tile.elevation;
+
+          for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+            const nx = current.x + dx;
+            const ny = current.y + dy;
+            const neighbor = getTile(nx, ny);
+            if (!neighbor) continue;
+
+            const index = ny * world.width + nx;
+            if (visited[index]) continue;
+            visited[index] = 1;
+
+            // The tiny epsilon tilts filled flats toward their outlet so the
+            // flow-routing pass never sees a perfectly level surface.
+            heapPush({ x: nx, y: ny, level: Math.max(neighbor.elevation, current.level + 0.000002) });
+          }
+        }
+      }
+
+      function applyMoistureAndFertility() {
+        computeRiverDistances();
+        computeSalinity();
+
+        for (const tile of world.tiles) {
+          if (tile.terrain === "river") {
+            tile.moisture = 1;
+            tile.fertility = 0.45;
+            continue;
+          }
+
+          // Wetness comes from the water the hydrology actually put here:
+          // standing water (ponding), streamflow passing through the tile,
+          // and groundwater seepage from the nearest channel. No authored
+          // gradients — any north/south pattern must emerge from where the
+          // water itself ends up.
+          const ponded = clamp(tile.pondingDepth / 0.008, 0, 1);
+          const streamflow = clamp(tile.flow / (world.width * world.height * 0.015), 0, 1);
+          const seepage = Math.pow(1 - clamp(tile.distanceToRiver / (world.height * 0.18), 0, 1), 1.6);
+          const moistureNoise = (layeredNoise(tile.x + 900, tile.y + 900) - 0.5) * 0.12;
+
+          tile.moisture = clamp(
+            ponded * 0.5 + streamflow * 0.3 + seepage * 0.55 + moistureNoise,
+            0,
+            1
+          );
+          // Salt poisons soil regardless of how wet it is: mild brackishness
+          // is tolerable (barley country), heavy salt kills fertility.
+          const saltPenalty = clamp((tile.salinity - 0.15) / 0.6, 0, 1) * 0.85;
+          tile.fertility = clamp(
+            (tile.moisture * 0.8 + seepage * 0.18 + (layeredNoise(tile.x + 1800, tile.y + 1800) - 0.5) * 0.08) *
+              (1 - saltPenalty),
+            0,
+            1
+          );
+
+          // Standing water deep enough to drown vegetation is open water —
+          // the gulf coast, lagoons, deep backswamp pools. Marsh is simply
+          // where water stands shallower and the ground is wet. The southern
+          // concentration is not asserted here — it emerges because the
+          // south is lower, ponds more, and meets the sea.
+          if (tile.pondingDepth > 0.012) {
+            tile.terrain = "water";
+            tile.moisture = 1;
+          } else if (tile.pondingDepth > 0.004 && tile.moisture > 0.55) {
+            // Vegetated shallow flooding is marsh whether the water is a
+            // backswamp pond or the tidal fringe of the sea itself.
+            tile.terrain = "marsh";
+          } else if (tile.pondingDepth > 0 && tile.waterSurface <= SEA_LEVEL + 0.0005) {
+            // A bare film of seawater with nothing growing in it: the
+            // intertidal mudflat is sea, not land that happens to be damp.
+            tile.terrain = "water";
+            tile.moisture = 1;
+          } else if (tile.salinity > 0.78 && tile.pondingDepth < 0.004) {
+            // Ground salty enough to crust over with no standing water to
+            // hide it: a sabkha pan. Appears wherever the salinity sources
+            // outrun the flushing — never placed directly.
+            tile.terrain = "salt_flat";
+          } else if (tile.moisture > 0.6 && tile.elevation < 0.51) {
+            tile.terrain = "wet_floodplain";
+          } else if (tile.fertility > 0.42) {
+            tile.terrain = "fertile_silt";
+          } else if (tile.moisture > 0.18) {
+            tile.terrain = "dry_ground";
+          } else {
+            tile.terrain = "desert_scrub";
+          }
+
+        }
+      }
+
+      function computeReedCapacity() {
+        // A reed tile's carrying capacity comes from two facts the hydrology
+        // already knows: how deep water stands (roots wet, crowns dry — a
+        // hump curve over ponding depth) and whether the water moves
+        // (channels scour reeds out, which keeps boat lanes open through the
+        // marsh). No noise: patchiness comes from growth dynamics.
+        const area = world.width * world.height;
+
+        for (const tile of world.tiles) {
+          if (tile.terrain === "river") {
+            tile.reedCapacity = 0;
+            continue;
+          }
+
+          const depth = tile.pondingDepth;
+          const rise = clamp((depth - 0.0005) / 0.0015, 0, 1);
+          const fall = 1 - clamp((depth - 0.01) / 0.006, 0, 1);
+          const depthSuitability = Math.min(rise, fall);
+          const flowTolerance = 1 - clamp(tile.flow / (area * 0.01), 0, 1);
+          // Phragmites is happy in brackish water but gives up as lagoons
+          // turn hypersaline — the saltiest pools stay open and bare.
+          const saltTolerance = 1 - clamp((tile.salinity - 0.35) / 0.35, 0, 1);
+
+          tile.reedCapacity = depthSuitability * flowTolerance * saltTolerance;
+        }
+      }
+
+      function seedReeds() {
+        // A mature world: beds sit at capacity, thinned by noise so the
+        // marsh reads as patchy stands rather than a uniform carpet.
+        for (const tile of world.tiles) {
+          tile.reedDensity = tile.reedCapacity * (0.5 + 0.5 * valueNoise(tile.x + 7000, tile.y + 7000, 11));
+        }
+      }
+
+      function generateWorld() {
+        world.tiles = [];
+
+        for (let y = 0; y < world.height; y++) {
+          for (let x = 0; x < world.width; x++) {
+            world.tiles.push({
+              x,
+              y,
+              elevation: generateElevation(x, y),
+              moisture: 0,
+              fertility: 0,
+              distanceToRiver: Infinity,
+              distanceToSea: Infinity,
+              plumeReach: 0,
+              salinity: 0,
+              waterSurface: 0,
+              pondingDepth: 0,
+              flow: 0,
+              terrain: "dry_ground",
+              surfaceWater: 0,
+              soilWater: 0,
+              riverStage: 0,
+              reedCapacity: 0,
+              reedDensity: 0,
+            });
+          }
+        }
+
+        // Hydrology pipeline: condition the surface so every tile drains,
+        // route rain + upstream inflow over it, carve channels where the
+        // discharge concentrates, then re-fill so the carved levees create
+        // fresh backswamp ponding for the moisture pass.
+        fillDepressions();
+        routeFlow();
+        carveRivers();
+        fillDepressions();
+        applyMoistureAndFertility();
+        computeReedCapacity();
+        seedReeds();
+
+        for (const tile of world.tiles) {
+          tile.soilWater = tile.moisture;
+          tile.surfaceWater = 0;
+          tile.riverStage = 0;
+        }
+      }
+
+      function mixColor(a, b, t) {
+        return {
+          r: Math.round(lerp(a.r, b.r, t)),
+          g: Math.round(lerp(a.g, b.g, t)),
+          b: Math.round(lerp(a.b, b.b, t)),
+        };
+      }
+
+      function colorToRgb(color) {
+        return `rgb(${color.r}, ${color.g}, ${color.b})`;
+      }
+
+      function withReeds(color, tile) {
+        // Reed tint scales with density: thin fringe barely shifts the tile,
+        // a mature bed reads as a solid stand of dry reed-brown.
+        if (tile.reedDensity < 0.03) return colorToRgb(color);
+        const reedTone = mixColor({ r: 122, g: 131, b: 56 }, { r: 139, g: 116, b: 61 }, tile.reedDensity);
+        return colorToRgb(mixColor(color, reedTone, tile.reedDensity * 0.75));
+      }
+
+      function terrainColor(tile) {
+        if (tile.terrain === "river") {
+          const stage = clamp(tile.surfaceWater / 0.09, 0, 1);
+          const riverColor = mixColor({ r: 40, g: 111, b: 147 }, { r: 72, g: 154, b: 190 }, stage);
+          return colorToRgb(riverColor);
+        }
+
+        if (tile.terrain === "water") {
+          // Shade open water by depth: pale lagoon shallows to deep gulf.
+          // River plumes turn the estuary murky green-brown against the
+          // clear blue of full-salinity sea. Shallow margins can still
+          // carry reeds standing in the water.
+          const depth = clamp((tile.pondingDepth - 0.012) / 0.025, 0, 1);
+          let waterColor = mixColor({ r: 62, g: 130, b: 152 }, { r: 24, g: 74, b: 112 }, depth);
+          const murk = clamp((0.6 - tile.salinity) / 0.6, 0, 1);
+          waterColor = mixColor(waterColor, { r: 86, g: 124, b: 108 }, murk * 0.55);
+          return withReeds(waterColor, tile);
+        }
+
+        const elevationShade = clamp((tile.elevation - 0.38) / 0.26, 0, 1);
+        const moistureShade = clamp(tile.moisture, 0, 1);
+
+        const palettes = {
+          marsh: {
+            low: { r: 35, g: 76, b: 70 },
+            high: { r: 63, g: 99, b: 77 },
+          },
+          wet_floodplain: {
+            low: { r: 74, g: 92, b: 57 },
+            high: { r: 113, g: 119, b: 68 },
+          },
+          fertile_silt: {
+            low: { r: 123, g: 109, b: 55 },
+            high: { r: 161, g: 143, b: 77 },
+          },
+          dry_ground: {
+            low: { r: 145, g: 111, b: 66 },
+            high: { r: 212, g: 174, b: 112 },
+          },
+          desert_scrub: {
+            low: { r: 182, g: 150, b: 88 },
+            high: { r: 224, g: 197, b: 132 },
+          },
+          salt_flat: {
+            low: { r: 184, g: 170, b: 142 },
+            high: { r: 212, g: 200, b: 172 },
+          },
+        };
+
+        const palette = palettes[tile.terrain] ?? palettes.dry_ground;
+        let color = mixColor(palette.low, palette.high, elevationShade * 0.7 + moistureShade * 0.3);
+
+        // Salt blanches the ground before it crusts into a full pan — a
+        // subtle wash, not paint: the underlying terrain stays legible.
+        const bloom = clamp((tile.salinity - 0.45) / 0.55, 0, 1);
+        if (bloom > 0) color = mixColor(color, { r: 216, g: 206, b: 184 }, bloom * 0.3);
+
+        return withReeds(color, tile);
+      }
+
+      function renderWorld() {
+        const showPonding = pondingOverlay.checked;
+
+        for (const tile of world.tiles) {
+          ctx.fillStyle = terrainColor(tile);
+          ctx.fillRect(
+            tile.x * TILE_SIZE,
+            tile.y * TILE_SIZE,
+            TILE_SIZE,
+            TILE_SIZE
+          );
+
+          if (showPonding && tile.pondingDepth > 0.0005 && tile.terrain !== "river") {
+            const intensity = clamp(tile.pondingDepth / 0.025, 0.25, 1);
+            ctx.fillStyle = `rgba(40, 140, 255, ${intensity * 0.65})`;
+            ctx.fillRect(tile.x * TILE_SIZE, tile.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
+
+          if (tile.surfaceWater > SURFACE_WATER_VISIBLE_DEPTH && tile.terrain !== "river" && !isOpenSeaSink(tile)) {
+            const intensity = clamp(tile.surfaceWater / 0.03, 0, 1);
+            ctx.fillStyle = `rgba(38, 132, 184, ${0.22 + intensity * 0.58})`;
+            ctx.fillRect(tile.x * TILE_SIZE, tile.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          } else if (tile.soilWater > tile.moisture + 0.08 && tile.terrain !== "water") {
+            const wetness = clamp((tile.soilWater - tile.moisture) / 0.6, 0, 1);
+            ctx.fillStyle = `rgba(55, 92, 68, ${wetness * 0.22})`;
+            ctx.fillRect(tile.x * TILE_SIZE, tile.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
+        }
+      }
+
+      function formatTerrainName(terrain) {
+        return terrain
+          .split("_")
+          .map((word) => word[0].toUpperCase() + word.slice(1))
+          .join(" ");
+      }
+
+      function renderTileInfo(tile) {
+        tileInfo.innerHTML = `
+          <strong>${formatTerrainName(tile.terrain)}</strong><br />
+          x: ${tile.x}, y: ${tile.y}<br />
+          elevation: ${tile.elevation.toFixed(3)}<br />
+          moisture: ${tile.moisture.toFixed(3)}<br />
+          fertility: ${tile.fertility.toFixed(3)}<br />
+          salinity: ${tile.salinity.toFixed(3)}<br />
+          ponding: ${tile.pondingDepth.toFixed(4)}<br />
+          surface water: ${tile.surfaceWater.toFixed(4)}<br />
+          soil water: ${tile.soilWater.toFixed(3)}<br />
+          flow: ${Math.round(tile.flow)}
+          ${tile.reedDensity > 0.01 ? `<br />reeds: ${tile.reedDensity.toFixed(2)} / ${tile.reedCapacity.toFixed(2)}` : ""}
+        `;
+      }
+
+      function updateHoveredTileInfo() {
+        if (!hoveredTilePosition) return;
+        const tile = getTile(hoveredTilePosition.x, hoveredTilePosition.y);
+        if (tile) renderTileInfo(tile);
+      }
+
+      function updateTileInfo(event) {
+        const rect = canvas.getBoundingClientRect();
+        const canvasX = event.clientX - rect.left;
+        const canvasY = event.clientY - rect.top;
+        const tileX = Math.floor((canvasX / rect.width) * world.width);
+        const tileY = Math.floor((canvasY / rect.height) * world.height);
+        const tile = getTile(tileX, tileY);
+
+        if (!tile) {
+          hoveredTilePosition = null;
+          tileInfo.textContent = "Hover over the map";
+          return;
+        }
+
+        hoveredTilePosition = { x: tileX, y: tileY };
+        renderTileInfo(tile);
+      }
+
+      canvas.addEventListener("mousemove", updateTileInfo);
+      canvas.addEventListener("mouseleave", () => {
+        hoveredTilePosition = null;
+        tileInfo.textContent = "Hover over the map";
+      });
+
+      generateWorld();
+      updateClockReadout();
+      renderWorld();
+    </script>
+  </body>
+</html>
