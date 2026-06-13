@@ -65,6 +65,14 @@ const RIVER_STAGE_PER_FLOW = 0.008;
 const SURFACE_EVAPORATION = 0.00028;
 const SURFACE_ABSORPTION = 0.00022;
 const SURFACE_WATER_VISIBLE_DEPTH = 0.00035;
+const WATER_NEIGHBORS = NEIGHBORS_8.map(([dx, dy]) => ({
+  dx,
+  dy,
+  distance: Math.sqrt(dx * dx + dy * dy),
+}));
+let seasonalWaterDeltas = new Float32Array(0);
+let seasonalWaterNeighborCache = [];
+let seasonalWaterNeighborCacheKey = "";
 
 function seasonalBaseLevel(tile) {
   return tile.pondingDepth > 0 ? tile.waterSurface : tile.elevation;
@@ -93,44 +101,69 @@ function applySeasonalForcing(dayOfYear) {
   }
 }
 
+function ensureSeasonalWaterNeighborCache() {
+  const cacheKey = `${world.width}x${world.height}x${world.tiles.length}`;
+  if (seasonalWaterNeighborCacheKey === cacheKey) return;
+
+  const width = world.width;
+  const height = world.height;
+  seasonalWaterNeighborCache = world.tiles.map((tile) => {
+    const neighbors = [];
+    for (const neighborStep of WATER_NEIGHBORS) {
+      const nx = tile.x + neighborStep.dx;
+      const ny = tile.y + neighborStep.dy;
+      if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+      neighbors.push({ index: ny * width + nx, distance: neighborStep.distance });
+    }
+    return neighbors;
+  });
+  seasonalWaterNeighborCacheKey = cacheKey;
+}
+
 function moveSeasonalSurfaceWater() {
-  const deltas = new Float32Array(world.tiles.length);
+  if (seasonalWaterDeltas.length !== world.tiles.length) {
+    seasonalWaterDeltas = new Float32Array(world.tiles.length);
+  }
+  ensureSeasonalWaterNeighborCache();
+  const deltas = seasonalWaterDeltas;
+  const tiles = world.tiles;
 
   for (let pass = 0; pass < WATER_MOVEMENT_PASSES; pass++) {
     deltas.fill(0);
 
-    for (const tile of world.tiles) {
+    for (let tileIndex = 0; tileIndex < tiles.length; tileIndex++) {
+      const tile = tiles[tileIndex];
       if (tile.surfaceWater <= 0.00001) continue;
 
-      const tileLevel = seasonalWaterLevel(tile);
-      const lower = [];
+      const tileLevel = (tile.pondingDepth > 0 ? tile.waterSurface : tile.elevation) + tile.surfaceWater;
+      const neighbors = seasonalWaterNeighborCache[tileIndex];
       let totalDrop = 0;
 
-      for (const [dx, dy] of NEIGHBORS_8) {
-        const neighbor = getTile(tile.x + dx, tile.y + dy);
-        if (!neighbor) continue;
-        const drop = tileLevel - seasonalWaterLevel(neighbor);
+      for (const neighborRef of neighbors) {
+        const neighbor = tiles[neighborRef.index];
+        const drop = tileLevel - ((neighbor.pondingDepth > 0 ? neighbor.waterSurface : neighbor.elevation) + neighbor.surfaceWater);
         if (drop <= 0.00002) continue;
-        const weightedDrop = drop / Math.sqrt(dx * dx + dy * dy);
-        lower.push({ neighbor, drop: weightedDrop });
-        totalDrop += weightedDrop;
+        totalDrop += drop / neighborRef.distance;
       }
 
-      if (lower.length === 0) continue;
+      if (totalDrop <= 0) continue;
 
       const spillFraction = tile.terrain === "river" ? 0.65 : 0.45;
       const slopeFraction = tile.terrain === "river" ? 0.35 : 0.18;
       const transferable = Math.min(tile.surfaceWater * spillFraction, totalDrop * slopeFraction);
       if (transferable <= 0) continue;
 
-      deltas[tileIndex(tile.x, tile.y)] -= transferable;
-      for (const option of lower) {
-        deltas[tileIndex(option.neighbor.x, option.neighbor.y)] += transferable * (option.drop / totalDrop);
+      deltas[tileIndex] -= transferable;
+      for (const neighborRef of neighbors) {
+        const neighbor = tiles[neighborRef.index];
+        const drop = tileLevel - ((neighbor.pondingDepth > 0 ? neighbor.waterSurface : neighbor.elevation) + neighbor.surfaceWater);
+        if (drop <= 0.00002) continue;
+        deltas[neighborRef.index] += transferable * ((drop / neighborRef.distance) / totalDrop);
       }
     }
 
-    for (let i = 0; i < world.tiles.length; i++) {
-      const tile = world.tiles[i];
+    for (let i = 0; i < tiles.length; i++) {
+      const tile = tiles[i];
       tile.surfaceWater = Math.max(0, tile.surfaceWater + deltas[i]);
       if (tile.terrain === "river") {
         // The river is a boundary source fed from off-map.

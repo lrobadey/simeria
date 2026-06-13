@@ -73,36 +73,151 @@ const FIELD_FLORA = [
   { key: "fish",  cap: "fishCap", rate: 0.06, disperse: 0.03 },
 ];
 
+let fieldFloraNeighbors = new Int32Array(0);
+let fieldFloraNeighborsKey = "";
+
+function ensureFieldFloraNeighbors() {
+  const key = `${world.width}x${world.height}x${world.tiles.length}`;
+  if (fieldFloraNeighborsKey === key) return;
+
+  fieldFloraNeighbors = new Int32Array(world.tiles.length * 4);
+  const width = world.width;
+  const height = world.height;
+
+  for (let i = 0; i < world.tiles.length; i++) {
+    const tile = world.tiles[i];
+    const x = tile.x;
+    const y = tile.y;
+    const offset = i * 4;
+    fieldFloraNeighbors[offset] = y > 0 ? (y - 1) * width + x : -1;
+    fieldFloraNeighbors[offset + 1] = y < height - 1 ? (y + 1) * width + x : -1;
+    fieldFloraNeighbors[offset + 2] = x > 0 ? y * width + x - 1 : -1;
+    fieldFloraNeighbors[offset + 3] = x < width - 1 ? y * width + x + 1 : -1;
+  }
+
+  fieldFloraNeighborsKey = key;
+}
+
 function updateFieldFlora(dtDays) {
+  ensureFieldFloraNeighbors();
   const dayOfYear = dayOfYearOf(sim.day);
   // Plants track the rain/heat year: lush spring growth, summer dormancy.
   const seasonVigor = clamp(0.35 + rainfallForDay(dayOfYear) * 0.6 +
     riverFlowForDay(dayOfYear) * 0.05 - (evaporationForDay(dayOfYear) - 1) * 0.25, 0.1, 1.2);
 
-  for (const field of FIELD_FLORA) {
-    const vigor = field.key === "fish" ? 1 : seasonVigor;
-    for (const tile of world.tiles) {
-      const K = tile[field.cap];
-      let d = tile[field.key];
-      if (K <= 0.01) {
-        if (d > 0) tile[field.key] = Math.max(0, d - 0.05 * dtDays); // habitat gone, die back
-        continue;
-      }
-      // Seeds drift in from the four neighbors — empty habitat refills
-      // from its edges, so recovery fronts sweep across grazed ground.
-      let neighborSeed = 0;
-      const up = getTile(tile.x, tile.y - 1), down = getTile(tile.x, tile.y + 1);
-      const left = getTile(tile.x - 1, tile.y), right = getTile(tile.x + 1, tile.y);
-      if (up) neighborSeed += up[field.key];
-      if (down) neighborSeed += down[field.key];
-      if (left) neighborSeed += left[field.key];
-      if (right) neighborSeed += right[field.key];
-      neighborSeed *= 0.25;
+  updateGrassField(dtDays, seasonVigor);
+  updateScrubField(dtDays, seasonVigor);
+  updateReedField(dtDays, seasonVigor);
+  updateFishField(dtDays);
+}
 
-      const growth = field.rate * vigor * d * (1 - d / K) +
-        field.disperse * vigor * neighborSeed * (1 - d / K);
-      tile[field.key] = clamp(d + growth * dtDays, 0, 1);
+function updateGrassField(dtDays, vigor) {
+  const tiles = world.tiles;
+  const neighbors = fieldFloraNeighbors;
+  const decay = 0.05 * dtDays;
+  for (let i = 0, offset = 0; i < tiles.length; i++, offset += 4) {
+    const tile = tiles[i];
+    const K = tile.grassCap;
+    let d = tile.grass;
+    if (K <= 0.01) {
+      if (d > 0) tile.grass = Math.max(0, d - decay); // habitat gone, die back
+      continue;
     }
+    // Seeds drift in from the four neighbors — empty habitat refills
+    // from its edges, so recovery fronts sweep across grazed ground.
+    let neighborSeed = 0;
+    const up = neighbors[offset], down = neighbors[offset + 1];
+    const left = neighbors[offset + 2], right = neighbors[offset + 3];
+    if (up >= 0) neighborSeed += tiles[up].grass;
+    if (down >= 0) neighborSeed += tiles[down].grass;
+    if (left >= 0) neighborSeed += tiles[left].grass;
+    if (right >= 0) neighborSeed += tiles[right].grass;
+    neighborSeed *= 0.25;
+
+    const growth = 0.16 * vigor * d * (1 - d / K) +
+      0.03 * vigor * neighborSeed * (1 - d / K);
+    tile.grass = clamp(d + growth * dtDays, 0, 1);
+  }
+}
+
+function updateScrubField(dtDays, vigor) {
+  const tiles = world.tiles;
+  const neighbors = fieldFloraNeighbors;
+  const decay = 0.05 * dtDays;
+  for (let i = 0, offset = 0; i < tiles.length; i++, offset += 4) {
+    const tile = tiles[i];
+    const K = tile.scrubCap;
+    let d = tile.scrub;
+    if (K <= 0.01) {
+      if (d > 0) tile.scrub = Math.max(0, d - decay); // habitat gone, die back
+      continue;
+    }
+    let neighborSeed = 0;
+    const up = neighbors[offset], down = neighbors[offset + 1];
+    const left = neighbors[offset + 2], right = neighbors[offset + 3];
+    if (up >= 0) neighborSeed += tiles[up].scrub;
+    if (down >= 0) neighborSeed += tiles[down].scrub;
+    if (left >= 0) neighborSeed += tiles[left].scrub;
+    if (right >= 0) neighborSeed += tiles[right].scrub;
+    neighborSeed *= 0.25;
+
+    const growth = 0.025 * vigor * d * (1 - d / K) +
+      0.006 * vigor * neighborSeed * (1 - d / K);
+    tile.scrub = clamp(d + growth * dtDays, 0, 1);
+  }
+}
+
+function updateReedField(dtDays, vigor) {
+  const tiles = world.tiles;
+  const neighbors = fieldFloraNeighbors;
+  const decay = 0.05 * dtDays;
+  for (let i = 0, offset = 0; i < tiles.length; i++, offset += 4) {
+    const tile = tiles[i];
+    const K = tile.reedCap;
+    let d = tile.reeds;
+    if (K <= 0.01) {
+      if (d > 0) tile.reeds = Math.max(0, d - decay); // habitat gone, die back
+      continue;
+    }
+    let neighborSeed = 0;
+    const up = neighbors[offset], down = neighbors[offset + 1];
+    const left = neighbors[offset + 2], right = neighbors[offset + 3];
+    if (up >= 0) neighborSeed += tiles[up].reeds;
+    if (down >= 0) neighborSeed += tiles[down].reeds;
+    if (left >= 0) neighborSeed += tiles[left].reeds;
+    if (right >= 0) neighborSeed += tiles[right].reeds;
+    neighborSeed *= 0.25;
+
+    const growth = 0.07 * vigor * d * (1 - d / K) +
+      0.015 * vigor * neighborSeed * (1 - d / K);
+    tile.reeds = clamp(d + growth * dtDays, 0, 1);
+  }
+}
+
+function updateFishField(dtDays) {
+  const tiles = world.tiles;
+  const neighbors = fieldFloraNeighbors;
+  const decay = 0.05 * dtDays;
+  for (let i = 0, offset = 0; i < tiles.length; i++, offset += 4) {
+    const tile = tiles[i];
+    const K = tile.fishCap;
+    let d = tile.fish;
+    if (K <= 0.01) {
+      if (d > 0) tile.fish = Math.max(0, d - decay); // habitat gone, die back
+      continue;
+    }
+    let neighborSeed = 0;
+    const up = neighbors[offset], down = neighbors[offset + 1];
+    const left = neighbors[offset + 2], right = neighbors[offset + 3];
+    if (up >= 0) neighborSeed += tiles[up].fish;
+    if (down >= 0) neighborSeed += tiles[down].fish;
+    if (left >= 0) neighborSeed += tiles[left].fish;
+    if (right >= 0) neighborSeed += tiles[right].fish;
+    neighborSeed *= 0.25;
+
+    const growth = 0.06 * d * (1 - d / K) +
+      0.03 * neighborSeed * (1 - d / K);
+    tile.fish = clamp(d + growth * dtDays, 0, 1);
   }
 }
 
