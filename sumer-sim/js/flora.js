@@ -11,19 +11,24 @@ function computeVegCapacities() {
   const area = world.width * world.height;
 
   for (const tile of world.tiles) {
-    const saltKill = 1 - clamp((tile.salinity - 0.25) / 0.45, 0, 1);
-    const saltTolerant = 1 - clamp((tile.salinity - 0.6) / 0.3, 0, 1);
+    const depth = liveWaterDepth(tile);
+    const moisture = liveWetness(tile);
+    const fertility = liveFertility(tile);
+    const salinity = liveSalinity(tile);
+    const flooded = tile.surfaceWater > SURFACE_WATER_VISIBLE_DEPTH * 2;
+    const saltKill = 1 - clamp((salinity - 0.25) / 0.45, 0, 1);
+    const saltTolerant = 1 - clamp((salinity - 0.6) / 0.3, 0, 1);
 
     // Floodplain grass: wants moist fertile ground that isn't drowned.
-    const drowned = clamp(tile.pondingDepth / 0.004, 0, 1);
-    tile.grassCap = isWaterTerrain(tile) ? 0 :
-      clamp(tile.fertility * 1.25, 0, 1) * (1 - drowned) * saltKill;
+    const drowned = clamp(depth / 0.004, 0, 1);
+    tile.grassCap = isWaterTerrain(tile) || flooded ? 0 :
+      clamp(fertility * 1.25, 0, 1) * (1 - drowned) * saltKill;
 
     // Desert scrub: peaks on dry marginal ground where grass gives up —
     // the niches partition themselves along the moisture axis.
-    const dryness = 1 - clamp((tile.moisture - 0.15) / 0.35, 0, 1);
-    const notBarren = clamp(tile.moisture / 0.06, 0, 1);
-    tile.scrubCap = isWaterTerrain(tile) ? 0 :
+    const dryness = 1 - clamp((moisture - 0.15) / 0.35, 0, 1);
+    const notBarren = clamp(moisture / 0.06, 0, 1);
+    tile.scrubCap = isWaterTerrain(tile) || flooded ? 0 :
       dryness * notBarren * saltTolerant * 0.7;
 
     // Reeds: roots wet, crowns dry — a hump over ponding depth, scoured
@@ -31,19 +36,18 @@ function computeVegCapacities() {
     if (tile.terrain === "river") {
       tile.reedCap = 0;
     } else {
-      const depth = tile.pondingDepth;
       const rise = clamp((depth - 0.0005) / 0.0015, 0, 1);
       const fall = 1 - clamp((depth - 0.01) / 0.006, 0, 1);
       const flowTolerance = 1 - clamp(tile.flow / (area * 0.01), 0, 1);
-      const saltTol = 1 - clamp((tile.salinity - 0.35) / 0.35, 0, 1);
+      const saltTol = 1 - clamp((salinity - 0.35) / 0.35, 0, 1);
       tile.reedCap = Math.min(rise, fall) * flowTolerance * saltTol;
     }
 
     // Fish: need real water; thrive where it's fresh-ish and where reeds
     // give cover (the marsh is the nursery, the open gulf is poorer).
-    if (isWaterTerrain(tile)) {
-      const depthOk = clamp(tile.pondingDepth / 0.006, 0, 1);
-      const freshness = 1 - clamp((tile.salinity - 0.5) / 0.4, 0, 1);
+    if (isWaterTerrain(tile) || depth > SURFACE_WATER_VISIBLE_DEPTH * 3) {
+      const depthOk = clamp(depth / 0.006, 0, 1);
+      const freshness = 1 - clamp((salinity - 0.5) / 0.4, 0, 1);
       const cover = 0.5 + 0.5 * clamp(tile.reedCap * 2, 0, 1);
       tile.fishCap = (tile.terrain === "river" ? 0.8 : depthOk) * freshness * cover;
     } else {
@@ -228,10 +232,10 @@ const TREE_SPECIES = {
     // Date palm: feet in the water table, head in the sun. Levee banks and
     // moist silt near channels; drowned or salted ground refuses it.
     suitability(tile) {
-      if (isWaterTerrain(tile) || tile.pondingDepth > 0.003) return 0;
+      if (isWaterTerrain(tile) || liveWaterDepth(tile) > 0.003) return 0;
       const waterTable = Math.pow(1 - clamp(tile.distanceToRiver / (world.height * 0.1), 0, 1), 1.4);
-      const moist = clamp((tile.moisture - 0.25) / 0.3, 0, 1);
-      const salt = 1 - clamp((tile.salinity - 0.4) / 0.3, 0, 1);
+      const moist = clamp((liveWetness(tile) - 0.25) / 0.3, 0, 1);
+      const salt = 1 - clamp((liveSalinity(tile) - 0.4) / 0.3, 0, 1);
       return Math.max(waterTable, moist * 0.8) * salt;
     },
     matureYears: 8, maxYears: 90, spacing: 2.2,
@@ -241,10 +245,10 @@ const TREE_SPECIES = {
     // Salt cedar: shrubby, frugal, salt-tolerant — it owns the margins
     // where palms and grass both fail.
     suitability(tile) {
-      if (isWaterTerrain(tile) || tile.pondingDepth > 0.003) return 0;
-      const some = clamp(tile.moisture / 0.12, 0, 1);
-      const notLush = 1 - clamp((tile.fertility - 0.5) / 0.3, 0, 1); // outcompeted on prime ground
-      const salt = 1 - clamp((tile.salinity - 0.75) / 0.2, 0, 1);
+      if (isWaterTerrain(tile) || liveWaterDepth(tile) > 0.003) return 0;
+      const some = clamp(liveWetness(tile) / 0.12, 0, 1);
+      const notLush = 1 - clamp((liveFertility(tile) - 0.5) / 0.3, 0, 1); // outcompeted on prime ground
+      const salt = 1 - clamp((liveSalinity(tile) - 0.75) / 0.2, 0, 1);
       return some * notLush * salt * 0.8;
     },
     matureYears: 4, maxYears: 40, spacing: 1.8,

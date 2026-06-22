@@ -14,7 +14,7 @@ const SPECIES = {
     adultDays: 200, maxDays: 365 * 8,
     breedEnergy: 0.7, breedProb: 0.035,    // per day when conditions met
     diurnal: true, swims: false, prey: true,
-    habitat: (t) => t.grassCap * (1 - clamp(t.pondingDepth / 0.002, 0, 1)),
+    habitat: (t) => t.grassCap * (1 - clamp(liveWaterDepth(t) / 0.002, 0, 1)),
     initCount: 70,
   },
   boar: {
@@ -50,7 +50,7 @@ const SPECIES = {
     adultDays: 500, maxDays: 365 * 14,
     breedEnergy: 0.85, breedProb: 0.0035,
     diurnal: false, swims: false, prey: false, predator: true,
-    habitat: (t) => clamp(t.grassCap + t.reedCap, 0, 1) * (1 - clamp(t.pondingDepth / 0.002, 0, 1)),
+    habitat: (t) => clamp(t.grassCap + t.reedCap, 0, 1) * (1 - clamp(liveWaterDepth(t) / 0.002, 0, 1)),
     initCount: 2,
   },
 };
@@ -105,10 +105,11 @@ function kmhToTilesPerDay(kmh) {
 function animalCanEnter(species, tile) {
   if (!tile) return false;
   if (tile.terrain === "river") return !!(species.swims || species.flies);
-  if (tile.terrain === "water") {
+  const depth = liveWaterDepth(tile);
+  if (tile.terrain === "water" || depth > SURFACE_WATER_VISIBLE_DEPTH * 3) {
     // Waders can cross a shallow lagoon waist-deep; nobody fords the
     // river channel itself without swimming.
-    return !!(species.swims || species.flies || (species.wades && tile.pondingDepth < 0.018));
+    return !!(species.swims || species.flies || (species.wades && depth < 0.018));
   }
   return true;
 }
@@ -145,8 +146,9 @@ function bestFoodAt(tile, species) {
   if (!tile || !species.eats) return null;
   let bestField = null, bestAmount = 0;
   for (const field of species.eats) {
-    if (field === "fish" && !isWaterTerrain(tile)) continue;
-    if (field !== "fish" && isWaterTerrain(tile) && !species.swims) continue;
+    const flooded = liveWaterDepth(tile) > SURFACE_WATER_VISIBLE_DEPTH * 3;
+    if (field === "fish" && !isWaterTerrain(tile) && !flooded) continue;
+    if (field !== "fish" && (isWaterTerrain(tile) || flooded) && !species.swims) continue;
     if (tile[field] > bestAmount) { bestAmount = tile[field]; bestField = field; }
   }
   return bestField ? { field: bestField, amount: bestAmount } : null;
@@ -180,8 +182,8 @@ function findWaterTile(a, species) {
     const tile = getTileF(x, y);
     if (!tile) continue;
     const drinkable = (tile.terrain === "river" || tile.terrain === "marsh" ||
-      (tile.terrain === "water" && tile.salinity < 0.5) ||
-      tile.surfaceWater > SURFACE_WATER_VISIBLE_DEPTH * 3) && tile.salinity < 0.6;
+      (tile.terrain === "water" && liveSalinity(tile) < 0.5) ||
+      tile.surfaceWater > SURFACE_WATER_VISIBLE_DEPTH * 3) && liveSalinity(tile) < 0.6;
     if (!drinkable) continue;
     const d = dist2(a.x, a.y, x, y);
     if (d < bestD) { bestD = d; best = { x, y }; }

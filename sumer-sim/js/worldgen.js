@@ -391,6 +391,7 @@ function generateWorld() {
         waterSurface: 0, pondingDepth: 0, flow: 0,
         terrain: "dry_ground",
         surfaceWater: 0, riverStage: 0,
+        floodMemory: 0, liveMoisture: null, liveSalinity: null, liveFertility: null,
         // flora fields, filled by flora.js
         grass: 0, grassCap: 0,
         scrub: 0, scrubCap: 0,

@@ -18,6 +18,7 @@ function createAgentMind() {
     longTermGoal: null,
     activeProject: null,
     dailyIntent: null,
+    pressures: null,
     memory: {
       resources: { forage: [], reeds: [], wood: [] },
       shelterSites: [],
@@ -301,6 +302,111 @@ function seekForage(forage, task) {
     forage.kind === "rhizomes" ? "Wading toward the reed beds" : "Heading to seed grass");
 }
 
+function strongestPressure(pressures) {
+  let best = { kind: "none", value: 0 };
+  for (const [kind, value] of Object.entries(pressures)) {
+    if (kind === "dominant" || kind === "context") continue;
+    if (value > best.value) best = { kind, value };
+  }
+  return best;
+}
+
+function nearestPredatorPressure() {
+  let pressure = 0;
+  let nearest = null;
+  for (const a of animals) {
+    if (a.dead || !SPECIES[a.species].predator) continue;
+    const d = Math.sqrt(dist2(agent.x, agent.y, a.x, a.y));
+    if (d > 22) continue;
+    const p = clamp(1 - d / 22, 0, 1);
+    if (p > pressure) {
+      pressure = p;
+      nearest = { species: a.species, distance: d };
+    }
+  }
+  return { pressure, nearest };
+}
+
+function nearbyOpportunityPressure() {
+  let forage = 0;
+  let prey = 0;
+  let wood = 0;
+
+  for (const memory of agent.mind.memory.resources.forage) {
+    forage = Math.max(forage, (memory.score || 0) * memoryFreshness(memory, 16));
+  }
+  for (const tree of treesNear(agent.x, agent.y, 18)) {
+    if (tree.removed || tree.dead) {
+      wood = Math.max(wood, tree.wood || 0);
+      continue;
+    }
+    if (tree.species === "palm") forage = Math.max(forage, tree.fruit * 1.4);
+    if (tree.species === "tamarisk" && treeIsMature(tree)) wood = Math.max(wood, 0.5);
+  }
+  for (const a of animals) {
+    if (a.dead || !SPECIES[a.species].prey) continue;
+    const d = Math.sqrt(dist2(agent.x, agent.y, a.x, a.y));
+    if (d < 16) prey = Math.max(prey, 1 - d / 16);
+  }
+
+  return {
+    forage: clamp(forage, 0, 1),
+    prey: clamp(prey, 0, 1),
+    wood: clamp(wood / 3, 0, 1),
+  };
+}
+
+function assessPressures() {
+  const inv = agent.inventory;
+  const tile = getTileF(agent.x, agent.y);
+  const sun = sunAltitude(sim.day);
+  const dark = nightness(sim.day);
+  const builtShelter = !!(agent.shelter && agent.shelter.built);
+  const shelterDistance = builtShelter ? Math.hypot(agent.x - agent.shelter.x, agent.y - agent.shelter.y) : Infinity;
+  const awayFromShelter = builtShelter && shelterDistance > 3;
+  const floodDepth = tile ? liveWaterDepth(tile) : 0;
+  const predator = nearestPredatorPressure();
+  const opportunity = nearbyOpportunityPressure();
+  const known = agent.mind.memory.resources;
+  const project = agent.mind.activeProject;
+  const shelterNeed = project && project.kind === "buildShelter" ? project.needed : { reeds: SHELTER_REEDS_NEEDED, wood: SHELTER_WOOD_NEEDED };
+  const reedGap = clamp((shelterNeed.reeds - inv.reeds) / SHELTER_REEDS_NEEDED, 0, 1);
+  const woodGap = clamp((shelterNeed.wood - inv.wood) / SHELTER_WOOD_NEEDED, 0, 1);
+  const foodScarcity = clamp((2.5 - inv.food) / 2.5, 0, 1);
+  const knownFood = known.forage.length > 0 ? 0 : 0.35;
+  const knownMaterials = (known.reeds.length > 0 ? 0 : 0.18) + (known.wood.length > 0 ? 0 : 0.18);
+  const blocked = clamp(agent.mind.memory.failedTargets.filter((p) => currentAgentDay() < p.until).length / 4, 0, 1);
+  const forageMemoryAge = known.forage.length
+    ? Math.min(...known.forage.map((p) => currentAgentDay() - p.lastSeen))
+    : Infinity;
+
+  const pressures = {
+    hunger: clamp(agent.hunger * 0.8 + foodScarcity * 0.35 - opportunity.forage * 0.18, 0, 1),
+    fatigue: clamp((1 - agent.energy) * 0.9 + dark * 0.25 + (awayFromShelter ? 0.12 : 0), 0, 1),
+    exposure: clamp((builtShelter ? 0 : 0.32) + dark * (builtShelter ? 0.08 : 0.25) +
+      clamp(floodDepth / 0.008, 0, 1) * 0.35 + (awayFromShelter ? 0.12 : 0), 0, 1),
+    scarcity: clamp(Math.max(foodScarcity, reedGap * 0.7, woodGap * 0.6) + knownFood + knownMaterials + blocked * 0.2, 0, 1),
+    risk: clamp(predator.pressure * 0.8 + dark * 0.35 + clamp(floodDepth / 0.012, 0, 1) * 0.35, 0, 1),
+    opportunity: clamp(Math.max(opportunity.forage, opportunity.wood, opportunity.prey * 0.75), 0, 1),
+    capability: clamp(inv.food / 3 * 0.3 + inv.wood / 6 * 0.25 + inv.reeds / 24 * 0.25 +
+      (builtShelter ? 0.2 : 0), 0, 1),
+    curiosity: clamp((forageMemoryAge === Infinity ? 0.35 : clamp(forageMemoryAge / 25, 0, 0.35)) +
+      knownFood + blocked * 0.45, 0, 1),
+  };
+
+  pressures.dominant = strongestPressure(pressures);
+  pressures.context = {
+    dark,
+    floodDepth,
+    shelterDistance,
+    predator: predator.nearest,
+    opportunities: opportunity,
+    blocked,
+  };
+  agent.mind.pressures = pressures;
+  return pressures;
+}
+
 function answerHunger(urgentOnly = false) {
   if (agent.state === "eatMeal") return false;
 
@@ -453,6 +559,7 @@ function pursueBuildShelterProject(project) {
 }
 
 function decideAgent() {
+  assessPressures();
   const sun = sunAltitude(sim.day);
   const inv = agent.inventory;
 
@@ -529,6 +636,7 @@ function updateAgent(dtDays) {
   if (!agent.alive) return;
   agent.hunger = clamp(agent.hunger + dtDays * 0.5, 0, 1.2);
   if (agent.state !== "sleep") agent.energy = clamp(agent.energy - dtDays * 0.65, 0, 1);
+  assessPressures();
 
   // Exhaustion forces sleep wherever he stands.
   if (agent.energy <= 0.03 && agent.state !== "sleep") {

@@ -89,6 +89,9 @@ function rebuildWetTiles() {
   // Seasonal flood water only changes on day ticks; cache the visible set.
   view.wetTiles = world.tiles.filter((t) =>
     t.surfaceWater > SURFACE_WATER_VISIBLE_DEPTH && t.terrain !== "river" && !isOpenSeaSink(t));
+  view.marshTiles = world.tiles.filter((t) =>
+    t.terrain === "marsh" || (t.terrain === "water" && t.reedCap > 0.2) ||
+    (t.surfaceWater > SURFACE_WATER_VISIBLE_DEPTH && t.reedCap > 0.2));
 }
 
 // ── Flora layer: rebaked when flora updates (once per game-hour) ────────

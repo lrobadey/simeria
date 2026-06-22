@@ -116,9 +116,11 @@ function updateHud() {
   const stock = agent.shelter && agent.shelter.built
     ? `food ${inv.food.toFixed(1)} · firewood ${Math.floor(inv.wood)} · hearth ${agent.shelter.fireLit ? "burning" : "cold"}`
     : `food ${inv.food.toFixed(1)} · reeds ${Math.floor(inv.reeds)}/${SHELTER_REEDS_NEEDED} · wood ${Math.floor(inv.wood)}/${SHELTER_WOOD_NEEDED}`;
+  const pressure = agent.mind.pressures?.dominant;
+  const pressureLine = pressure ? `<br />pressure: ${pressure.kind} ${(pressure.value * 100).toFixed(0)}%` : "";
   document.getElementById("agent-panel").innerHTML =
     `<strong>${agent.name}</strong> — ${agent.task}<br />` +
-    `${needs}<br />` + stock;
+    `${needs}<br />` + stock + pressureLine;
 }
 
 // ── Hover inspection ────────────────────────────────────────────────────
@@ -166,15 +168,15 @@ function renderHoverInfo() {
   const name = tile.terrain.split("_").map((w) => w[0].toUpperCase() + w.slice(1)).join(" ");
   const lines = [`<strong>${name}</strong>`];
   if (!isWaterTerrain(tile)) {
-    lines.push(`fertility ${(tile.fertility * 100).toFixed(0)}% · moisture ${(liveWetness(tile) * 100).toFixed(0)}%`);
-    if (tile.salinity > 0.3) lines.push(`salt-touched (${(tile.salinity * 100).toFixed(0)}%)`);
+    lines.push(`fertility ${(liveFertility(tile) * 100).toFixed(0)}% · moisture ${(liveWetness(tile) * 100).toFixed(0)}%`);
+    if (liveSalinity(tile) > 0.3) lines.push(`salt-touched (${(liveSalinity(tile) * 100).toFixed(0)}%)`);
     const veg = [];
     if (tile.grass > 0.1) veg.push(`grass ${(tile.grass * 100).toFixed(0)}%`);
     if (tile.reeds > 0.1) veg.push(`reeds ${(tile.reeds * 100).toFixed(0)}%`);
     if (tile.scrub > 0.1) veg.push(`scrub ${(tile.scrub * 100).toFixed(0)}%`);
     if (veg.length) lines.push(veg.join(" · "));
   } else {
-    lines.push(`${tile.salinity > 0.6 ? "salt water" : tile.salinity > 0.3 ? "brackish" : "fresh water"}`);
+    lines.push(`${liveSalinity(tile) > 0.6 ? "salt water" : liveSalinity(tile) > 0.3 ? "brackish" : "fresh water"}`);
     if (tile.fish > 0.1) lines.push(`fish ${(tile.fish * 100).toFixed(0)}%`);
   }
   if (tile.surfaceWater > SURFACE_WATER_VISIBLE_DEPTH && tile.terrain !== "river") lines.push("flooded");

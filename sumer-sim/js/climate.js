@@ -65,6 +65,8 @@ const RIVER_STAGE_PER_FLOW = 0.008;
 const SURFACE_EVAPORATION = 0.00028;
 const SURFACE_ABSORPTION = 0.00022;
 const SURFACE_WATER_VISIBLE_DEPTH = 0.00035;
+const FLOOD_MEMORY_GAIN = 0.22;
+const FLOOD_MEMORY_DRY_RATE = 0.045;
 const WATER_NEIGHBORS = NEIGHBORS_8.map(([dx, dy]) => ({
   dx,
   dy,
@@ -199,10 +201,60 @@ function simulateSeasonalWaterDay(dayOfYear) {
   applySeasonalForcing(dayOfYear);
   moveSeasonalSurfaceWater();
   infiltrateAndEvaporateSeasonalWater(dayOfYear);
+  updateLiveHydrology(dayOfYear);
+  if (typeof computeVegCapacities === "function") computeVegCapacities();
 }
 
-// Effective wetness a plant or animal experiences right now: worldgen
-// moisture plus any seasonal flood water currently sitting on the tile.
+function liveWaterDepth(tile) {
+  return tile.pondingDepth + tile.surfaceWater;
+}
+
+function updateLiveHydrology(dayOfYear) {
+  const evaporation = evaporationForDay(dayOfYear);
+  const rainfall = rainfallForDay(dayOfYear);
+
+  for (const tile of world.tiles) {
+    if (tile.terrain === "river") {
+      tile.floodMemory = 1;
+      tile.liveMoisture = 1;
+      tile.liveSalinity = tile.salinity;
+      tile.liveFertility = tile.fertility;
+      continue;
+    }
+
+    const floodPulse = clamp(tile.surfaceWater / 0.006, 0, 1);
+    const rainRecharge = rainfall * 0.035;
+    const drydown = FLOOD_MEMORY_DRY_RATE * evaporation * (1 - floodPulse * 0.6);
+    tile.floodMemory = clamp((tile.floodMemory || 0) * (1 - drydown) +
+      floodPulse * FLOOD_MEMORY_GAIN + rainRecharge, 0, 1);
+
+    const currentWetness = clamp(tile.moisture + tile.floodMemory * 0.55 +
+      clamp(tile.surfaceWater / 0.004, 0, 0.5), 0, 1);
+    const freshening = clamp(tile.floodMemory * 0.6 + tile.surfaceWater / 0.012, 0, 0.75);
+    const evaporite = tile.floodMemory < 0.08 && evaporation > 1
+      ? (evaporation - 1) * clamp(tile.salinity, 0, 1) * 0.04
+      : 0;
+    const liveSalt = clamp(tile.salinity * (1 - freshening * 0.55) + evaporite, 0, 1);
+    const saltPenalty = clamp((liveSalt - 0.15) / 0.6, 0, 1) * 0.85;
+    const siltBonus = floodPulse * (1 - clamp(tile.distanceToRiver / (world.height * 0.16), 0, 1)) * 0.12;
+
+    tile.liveMoisture = currentWetness;
+    tile.liveSalinity = liveSalt;
+    tile.liveFertility = clamp((tile.fertility + siltBonus + currentWetness * 0.12) *
+      (1 - saltPenalty * 0.35), 0, 1);
+  }
+}
+
+// Effective conditions a plant or animal experiences right now: worldgen
+// hydrology plus seasonal flood water and lingering soil wetness.
 function liveWetness(tile) {
-  return clamp(tile.moisture + clamp(tile.surfaceWater / 0.004, 0, 0.5), 0, 1);
+  return tile.liveMoisture ?? clamp(tile.moisture + clamp(tile.surfaceWater / 0.004, 0, 0.5), 0, 1);
+}
+
+function liveSalinity(tile) {
+  return tile.liveSalinity ?? tile.salinity;
+}
+
+function liveFertility(tile) {
+  return tile.liveFertility ?? tile.fertility;
 }

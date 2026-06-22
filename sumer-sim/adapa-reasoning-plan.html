@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Adapa Reasoning Plan</title>
+    <style>
+      :root {
+        --paper: #efe7d6;
+        --ink: #211b14;
+        --muted: #756a5a;
+        --line: #c7b99e;
+        --wash: #e2d3b6;
+        --deep: #423523;
+        --accent: #8a4d2c;
+        --green: #536f45;
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: Georgia, "Times New Roman", serif;
+      }
+
+      main {
+        min-height: 100vh;
+      }
+
+      .hero {
+        min-height: 62svh;
+        display: grid;
+        align-items: end;
+        padding: 56px clamp(22px, 6vw, 88px);
+        background:
+          linear-gradient(90deg, rgba(33, 27, 20, 0.88), rgba(33, 27, 20, 0.56), rgba(33, 27, 20, 0.06)),
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900'%3E%3Cdefs%3E%3ClinearGradient id='s' x1='0' x2='0' y1='0' y2='1'%3E%3Cstop stop-color='%23879f91'/%3E%3Cstop offset='.44' stop-color='%23c5b176'/%3E%3Cstop offset='1' stop-color='%23745a36'/%3E%3C/linearGradient%3E%3Cfilter id='n'%3E%3CfeTurbulence baseFrequency='.012 .026' numOctaves='4' seed='9'/%3E%3CfeColorMatrix type='saturate' values='.35'/%3E%3CfeBlend mode='multiply' in2='SourceGraphic'/%3E%3C/filter%3E%3C/defs%3E%3Crect width='1600' height='900' fill='url(%23s)'/%3E%3Cpath d='M0 560 C260 480 360 650 580 570 C780 498 875 355 1120 380 C1320 398 1440 510 1600 470 L1600 900 L0 900Z' fill='%23634d2f' opacity='.75'/%3E%3Cpath d='M0 660 C220 600 390 710 640 640 C880 572 1040 490 1600 560 L1600 900 L0 900Z' fill='%233b5c57' opacity='.58'/%3E%3Cpath d='M330 0 C420 170 390 280 470 420 C560 578 690 650 720 900' fill='none' stroke='%23d9e0cb' stroke-width='64' opacity='.56'/%3E%3Cpath d='M350 0 C430 170 420 290 500 420 C595 565 710 648 750 900' fill='none' stroke='%235e887c' stroke-width='24' opacity='.62'/%3E%3Crect width='1600' height='900' filter='url(%23n)' opacity='.22'/%3E%3C/svg%3E");
+        background-size: cover;
+        background-position: center;
+      }
+
+      .hero-inner {
+        max-width: 780px;
+        color: #f8f0df;
+        animation: rise 520ms ease-out both;
+      }
+
+      .eyebrow {
+        margin: 0 0 14px;
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: #d6bc91;
+      }
+
+      h1 {
+        margin: 0;
+        max-width: 720px;
+        font-size: clamp(44px, 8vw, 92px);
+        line-height: 0.94;
+        font-weight: 500;
+        letter-spacing: 0;
+      }
+
+      .hero p {
+        max-width: 590px;
+        margin: 22px 0 0;
+        color: #e8d8bd;
+        font-size: clamp(17px, 2vw, 22px);
+        line-height: 1.45;
+      }
+
+      section {
+        padding: 58px clamp(22px, 6vw, 88px);
+        border-top: 1px solid rgba(66, 53, 35, 0.16);
+      }
+
+      .section-head {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 24px;
+        margin-bottom: 28px;
+      }
+
+      h2 {
+        margin: 0;
+        font-size: clamp(28px, 4vw, 46px);
+        line-height: 1;
+        font-weight: 500;
+        letter-spacing: 0;
+      }
+
+      .note {
+        max-width: 440px;
+        margin: 0;
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1.5;
+      }
+
+      .compare {
+        display: grid;
+        grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
+        gap: 34px;
+      }
+
+      .ladder,
+      .loop {
+        min-width: 0;
+      }
+
+      .label {
+        margin: 0 0 14px;
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+
+      .step-list {
+        display: grid;
+        gap: 10px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .step-list li,
+      .node,
+      .project,
+      .phase {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.2);
+        padding: 13px 15px;
+        transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+      }
+
+      .step-list li:hover,
+      .node:hover,
+      .project:hover,
+      .phase:hover {
+        transform: translateY(-2px);
+        background: rgba(255, 255, 255, 0.42);
+        border-color: var(--accent);
+      }
+
+      .step-list strong,
+      .node strong,
+      .project strong,
+      .phase strong {
+        display: block;
+        font-weight: 600;
+      }
+
+      .step-list span,
+      .node span,
+      .project span,
+      .phase span {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.4;
+      }
+
+      .loop-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .node {
+        min-height: 112px;
+      }
+
+      .node.core {
+        background: var(--deep);
+        color: #f4ead8;
+        border-color: var(--deep);
+      }
+
+      .node.core span {
+        color: #d9c8aa;
+      }
+
+      .pressure-grid,
+      .project-grid,
+      .phase-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .pressure {
+        border-top: 2px solid var(--green);
+        padding-top: 12px;
+      }
+
+      .pressure b {
+        display: block;
+        font-size: 15px;
+      }
+
+      .pressure span {
+        display: block;
+        margin-top: 5px;
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.4;
+      }
+
+      .project {
+        min-height: 132px;
+      }
+
+      .phase {
+        background: var(--wash);
+      }
+
+      .equation {
+        margin: 26px 0 0;
+        padding: 18px 0 0;
+        border-top: 1px solid var(--line);
+        color: var(--deep);
+        font-size: clamp(22px, 3vw, 34px);
+        line-height: 1.2;
+      }
+
+      .final {
+        background: var(--deep);
+        color: #f3e9d7;
+      }
+
+      .final .note,
+      .final span {
+        color: #d6c3a5;
+      }
+
+      .final .phase {
+        background: rgba(239, 231, 214, 0.08);
+        border-color: rgba(239, 231, 214, 0.28);
+      }
+
+      @keyframes rise {
+        from { opacity: 0; transform: translateY(14px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+
+      @media (max-width: 880px) {
+        .compare,
+        .loop-grid,
+        .pressure-grid,
+        .project-grid,
+        .phase-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .section-head {
+          display: block;
+        }
+
+        .note {
+          margin-top: 12px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <div class="hero-inner">
+          <p class="eyebrow">Adapa reasoning redesign</p>
+          <h1>From ladder to living loop</h1>
+          <p>Replace the one-way survival script with a recurring appraisal cycle where needs, memory, risk, and opportunity compete every day.</p>
+        </div>
+      </header>
+
+      <section>
+        <div class="section-head">
+          <h2>The pivot</h2>
+          <p class="note">The current chain asks what branch comes next. The new loop asks what pressure matters most now.</p>
+        </div>
+
+        <div class="compare">
+          <div class="ladder">
+            <p class="label">Current ladder</p>
+            <ol class="step-list">
+              <li><strong>Eat if hungry</strong><span>Body need interrupts everything else.</span></li>
+              <li><strong>Sleep if night</strong><span>Energy and darkness trigger a fixed rest branch.</span></li>
+              <li><strong>Forage if pack is low</strong><span>Food stock is a simple threshold.</span></li>
+              <li><strong>Build shelter</strong><span>The house project is inevitable once food is stable.</span></li>
+              <li><strong>Stockpile and idle</strong><span>Home life is two thresholds: food and wood.</span></li>
+            </ol>
+          </div>
+
+          <div class="loop">
+            <p class="label">Target loop</p>
+            <div class="loop-grid">
+              <div class="node"><strong>Sense</strong><span>Read hunger, energy, daylight, weather, animals, water, known resources.</span></div>
+              <div class="node"><strong>Remember</strong><span>Update places, failures, prey ranges, scarcity, danger, reliable food.</span></div>
+              <div class="node core"><strong>Appraise</strong><span>Turn state into live pressures and opportunity scores.</span></div>
+              <div class="node"><strong>Compete</strong><span>Score all viable projects against the current active project.</span></div>
+              <div class="node"><strong>Act</strong><span>Do the next small action for the chosen project.</span></div>
+              <div class="node"><strong>Learn</strong><span>Feed the cost, result, and discovery back into memory.</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Pressure model</h2>
+          <p class="note">Pressures are not tasks. They are reasons. Tasks become realistic when they answer several reasons at once.</p>
+        </div>
+
+        <div class="pressure-grid">
+          <div class="pressure"><b>Hunger</b><span>Body hunger, stored food, known food reliability, season.</span></div>
+          <div class="pressure"><b>Fatigue</b><span>Energy, daylight remaining, distance from safe rest.</span></div>
+          <div class="pressure"><b>Exposure</b><span>Bad sleep, floodwater, night risk, lack of roof or fire.</span></div>
+          <div class="pressure"><b>Scarcity</b><span>Low known reeds, wood, food, or repeated failed search.</span></div>
+          <div class="pressure"><b>Risk</b><span>Darkness, deep water, predator proximity, boar danger, injury.</span></div>
+          <div class="pressure"><b>Opportunity</b><span>Ripe dates, visible prey, fish flood pools, fresh deadwood.</span></div>
+          <div class="pressure"><b>Capability</b><span>Tools, materials, memory quality, recent success or failure.</span></div>
+          <div class="pressure"><b>Curiosity</b><span>Unknown nearby map, stale memory, blocked project alternatives.</span></div>
+        </div>
+
+        <p class="equation">project score = pressure answered + opportunity + readiness - cost - risk</p>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Project candidates</h2>
+          <p class="note">The active project continues only while it remains competitive. Shelter can pause; hunger can subside; hunting can wait for a better opening.</p>
+        </div>
+
+        <div class="project-grid">
+          <div class="project"><strong>Forage</strong><span>Best when hunger is high, safe food is remembered, or daylight is short.</span></div>
+          <div class="project"><strong>Rest</strong><span>Best when fatigue or darkness makes other work costly.</span></div>
+          <div class="project"><strong>Build shelter</strong><span>Best when exposure is high, materials are known, and food pressure is low.</span></div>
+          <div class="project"><strong>Gather fuel</strong><span>Best when night approaches, hearth value is high, or deadwood is nearby.</span></div>
+          <div class="project"><strong>Explore</strong><span>Best when memory is stale, resources are blocked, or local scarcity rises.</span></div>
+          <div class="project"><strong>Make tool</strong><span>Best when a tool unlocks several blocked projects, especially hunting or fishing.</span></div>
+          <div class="project"><strong>Hunt or fish</strong><span>Best when food pressure and prey opportunity beat risk and energy cost.</span></div>
+          <div class="project"><strong>Relocate camp</strong><span>Best when current ground repeatedly fails: flood, food, fuel, safety.</span></div>
+        </div>
+      </section>
+
+      <section class="final">
+        <div class="section-head">
+          <h2>Implementation path</h2>
+          <p class="note">Refactor in layers so each step preserves the current behavior while opening space for more realistic choices.</p>
+        </div>
+
+        <div class="phase-grid">
+          <div class="phase"><strong>1. Extract pressures</strong><span>Add `assessPressures()` from hunger, energy, daylight, memory, flood, and inventory.</span></div>
+          <div class="phase"><strong>2. Generate projects</strong><span>Replace the ladder body with candidate builders for forage, rest, shelter, fuel, explore.</span></div>
+          <div class="phase"><strong>3. Score and persist</strong><span>Keep `activeProject` if it still scores near the winner; otherwise switch with a memory reason.</span></div>
+          <div class="phase"><strong>4. Add capability</strong><span>Introduce crude tools and make hunting/fishing depend on method, terrain, and opportunity.</span></div>
+          <div class="phase"><strong>5. Learn from outcomes</strong><span>Every success, failure, injury, blocked route, or rich patch changes future scores.</span></div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
