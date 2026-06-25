@@ -12,6 +12,8 @@ const FIRE_WOOD_PER_NIGHT = 1;
 const HUNGER_FORAGE_THRESHOLD = 0.4;
 const HUNGER_MEAL_THRESHOLD = 0.55;
 const HUNGER_URGENT_THRESHOLD = 0.7;
+const LAND_SIGHT_RADIUS = 18;
+const LAND_MEMORY_FADE_DAYS = 45;
 
 function createAgentMind() {
   return {
@@ -20,11 +22,67 @@ function createAgentMind() {
     dailyIntent: null,
     pressures: null,
     memory: {
+      land: null,
       resources: { forage: [], reeds: [], wood: [] },
       shelterSites: [],
       failedTargets: [],
     },
   };
+}
+
+function createLandKnowledge() {
+  const lastSeen = new Float32Array(world.width * world.height);
+  lastSeen.fill(-1);
+  return {
+    width: world.width,
+    height: world.height,
+    lastSeen,
+    knownCount: 0,
+    lastObservedAt: -1,
+  };
+}
+
+function ensureLandKnowledge() {
+  const knowledge = agent.mind.memory.land;
+  if (knowledge && knowledge.width === world.width && knowledge.height === world.height) {
+    return knowledge;
+  }
+  agent.mind.memory.land = createLandKnowledge();
+  return agent.mind.memory.land;
+}
+
+function observeLand(radius = LAND_SIGHT_RADIUS) {
+  if (typeof world === "undefined" || !world.tiles.length) return null;
+  const knowledge = ensureLandKnowledge();
+  const day = currentAgentDay();
+  const cx = Math.floor(agent.x);
+  const cy = Math.floor(agent.y);
+  const r2 = radius * radius;
+
+  for (let y = Math.max(0, cy - radius); y <= Math.min(world.height - 1, cy + radius); y++) {
+    for (let x = Math.max(0, cx - radius); x <= Math.min(world.width - 1, cx + radius); x++) {
+      const dx = x + 0.5 - agent.x;
+      const dy = y + 0.5 - agent.y;
+      if (dx * dx + dy * dy > r2) continue;
+      const i = tileIndex(x, y);
+      if (knowledge.lastSeen[i] < 0) knowledge.knownCount++;
+      knowledge.lastSeen[i] = day;
+    }
+  }
+
+  knowledge.lastObservedAt = day;
+  return knowledge;
+}
+
+function landMemoryFreshnessAt(x, y) {
+  const knowledge = agent.mind.memory.land;
+  if (!knowledge) return 0;
+  const tx = Math.floor(x);
+  const ty = Math.floor(y);
+  if (tx < 0 || ty < 0 || tx >= knowledge.width || ty >= knowledge.height) return 0;
+  const lastSeen = knowledge.lastSeen[tileIndex(tx, ty)];
+  if (lastSeen < 0) return 0;
+  return clamp(1 - (currentAgentDay() - lastSeen) / LAND_MEMORY_FADE_DAYS, 0, 1);
 }
 
 const agent = {
@@ -118,6 +176,7 @@ function initAgent() {
   agent.x = best.x + 0.5;
   agent.y = best.y + 0.5;
   agent.mind = createAgentMind();
+  observeLand();
 }
 
 function agentSpeed() { return kmhToTilesPerDay(4); }
@@ -369,7 +428,8 @@ function assessPressures() {
   const opportunity = nearbyOpportunityPressure();
   const known = agent.mind.memory.resources;
   const project = agent.mind.activeProject;
-  const shelterNeed = project && project.kind === "buildShelter" ? project.needed : { reeds: SHELTER_REEDS_NEEDED, wood: SHELTER_WOOD_NEEDED };
+  const shelterNeed = project && project.kind === "buildShelter" && project.needed ?
+    project.needed : { reeds: SHELTER_REEDS_NEEDED, wood: SHELTER_WOOD_NEEDED };
   const reedGap = clamp((shelterNeed.reeds - inv.reeds) / SHELTER_REEDS_NEEDED, 0, 1);
   const woodGap = clamp((shelterNeed.wood - inv.wood) / SHELTER_WOOD_NEEDED, 0, 1);
   const foodScarcity = clamp((2.5 - inv.food) / 2.5, 0, 1);
@@ -445,6 +505,17 @@ function createBuildShelterProject() {
   };
 }
 
+const PROJECT_HANDLERS = {};
+
+function registerProjectHandler(handler) {
+  PROJECT_HANDLERS[handler.kind] = handler;
+  return handler;
+}
+
+function projectHandlerFor(kind) {
+  return PROJECT_HANDLERS[kind] || null;
+}
+
 function setLongTermGoal(kind, reason) {
   const goal = agent.mind.longTermGoal;
   if (!goal || goal.kind !== kind) {
@@ -469,23 +540,65 @@ function setDailyIntent(project, kind, detail = {}) {
   project.updatedAt = currentAgentDay();
 }
 
-function ensureShelterProject() {
-  if (agent.shelter && agent.shelter.built) {
-    setLongTermGoal("maintainHome", "Keep the first shelter useful");
-    if (agent.mind.activeProject && agent.mind.activeProject.kind === "buildShelter") {
-      agent.mind.activeProject.status = "complete";
-      agent.mind.activeProject.progress = 1;
-      agent.mind.activeProject.updatedAt = currentAgentDay();
-    }
-    return null;
-  }
+function completeProject(project) {
+  if (!project) return;
+  project.status = "complete";
+  project.progress = 1;
+  project.updatedAt = currentAgentDay();
+}
 
-  setLongTermGoal("buildShelter", "Make a safer place to sleep");
-  if (!agent.mind.activeProject || agent.mind.activeProject.kind !== "buildShelter" ||
+function completeActiveProject(kind) {
+  if (agent.mind.activeProject && agent.mind.activeProject.kind === kind) {
+    completeProject(agent.mind.activeProject);
+  }
+}
+
+function projectPriority(handler) {
+  return typeof handler.priority === "function" ? handler.priority() : handler.priority || 0;
+}
+
+function chooseProjectHandler() {
+  let best = null;
+  let bestScore = 0;
+  for (const handler of Object.values(PROJECT_HANDLERS)) {
+    if (handler.isComplete && handler.isComplete()) continue;
+    const score = projectPriority(handler);
+    if (score > bestScore) {
+      best = handler;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function refreshCompletedProjects() {
+  for (const handler of Object.values(PROJECT_HANDLERS)) {
+    if (!handler.isComplete || !handler.isComplete()) continue;
+    completeActiveProject(handler.kind);
+    if (handler.maintenanceGoal) {
+      setLongTermGoal(handler.maintenanceGoal.kind, handler.maintenanceGoal.reason);
+    }
+  }
+}
+
+function ensureProject(handler) {
+  setLongTermGoal(handler.goal.kind, handler.goal.reason);
+  if (!agent.mind.activeProject || agent.mind.activeProject.kind !== handler.kind ||
       agent.mind.activeProject.status === "complete") {
-    agent.mind.activeProject = createBuildShelterProject();
+    agent.mind.activeProject = handler.create();
   }
   return agent.mind.activeProject;
+}
+
+function ensureActiveProject() {
+  refreshCompletedProjects();
+  const handler = chooseProjectHandler();
+  return handler ? ensureProject(handler) : null;
+}
+
+function pursueProject(project) {
+  const handler = projectHandlerFor(project.kind);
+  return !!(handler && handler.pursue && handler.pursue(project));
 }
 
 function pursueBuildShelterProject(project) {
@@ -558,6 +671,20 @@ function pursueBuildShelterProject(project) {
   return false;
 }
 
+registerProjectHandler({
+  kind: "buildShelter",
+  goal: { kind: "buildShelter", reason: "Make a safer place to sleep" },
+  maintenanceGoal: { kind: "maintainHome", reason: "Keep the first shelter useful" },
+  priority() {
+    return agent.shelter && agent.shelter.built ? 0 : 1;
+  },
+  isComplete() {
+    return !!(agent.shelter && agent.shelter.built);
+  },
+  create: createBuildShelterProject,
+  pursue: pursueBuildShelterProject,
+});
+
 function decideAgent() {
   assessPressures();
   const sun = sunAltitude(sim.day);
@@ -598,8 +725,8 @@ function decideAgent() {
     }
   }
 
-  const shelterProject = ensureShelterProject();
-  if (shelterProject && pursueBuildShelterProject(shelterProject)) {
+  const project = ensureActiveProject();
+  if (project && pursueProject(project)) {
     return;
   }
 
@@ -634,6 +761,7 @@ const AGENT_SPECIES = { wades: true }; // he can wade a lagoon, not the river
 
 function updateAgent(dtDays) {
   if (!agent.alive) return;
+  observeLand();
   agent.hunger = clamp(agent.hunger + dtDays * 0.5, 0, 1.2);
   if (agent.state !== "sleep") agent.energy = clamp(agent.energy - dtDays * 0.65, 0, 1);
   assessPressures();
@@ -789,11 +917,7 @@ function updateAgent(dtDays) {
       if (s.progress >= 1) {
         s.progress = 1;
         s.built = true;
-        if (agent.mind.activeProject && agent.mind.activeProject.kind === "buildShelter") {
-          agent.mind.activeProject.status = "complete";
-          agent.mind.activeProject.progress = 1;
-          agent.mind.activeProject.updatedAt = currentAgentDay();
-        }
+        completeActiveProject("buildShelter");
         agent.inventory.reeds -= SHELTER_REEDS_NEEDED;
         agent.inventory.wood -= SHELTER_WOOD_NEEDED - 2; // a little left for the first fire
         agent.inventory.reeds = Math.max(0, agent.inventory.reeds);
@@ -816,4 +940,5 @@ function updateAgent(dtDays) {
       agent.shelter.fireLit = false;
     }
   }
+  observeLand();
 }

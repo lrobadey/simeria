@@ -118,9 +118,13 @@ function updateHud() {
     : `food ${inv.food.toFixed(1)} · reeds ${Math.floor(inv.reeds)}/${SHELTER_REEDS_NEEDED} · wood ${Math.floor(inv.wood)}/${SHELTER_WOOD_NEEDED}`;
   const pressure = agent.mind.pressures?.dominant;
   const pressureLine = pressure ? `<br />pressure: ${pressure.kind} ${(pressure.value * 100).toFixed(0)}%` : "";
+  const land = agent.mind.memory.land;
+  const knowledgeLine = view.showAgentKnowledge && land
+    ? `<br />known land: ${(land.knownCount / (land.width * land.height) * 100).toFixed(1)}%`
+    : "";
   document.getElementById("agent-panel").innerHTML =
     `<strong>${agent.name}</strong> — ${agent.task}<br />` +
-    `${needs}<br />` + stock + pressureLine;
+    `${needs}<br />` + stock + pressureLine + knowledgeLine;
 }
 
 // ── Hover inspection ────────────────────────────────────────────────────
@@ -242,6 +246,11 @@ function boot() {
   document.getElementById("track-adapa").addEventListener("click", (e) => {
     view.trackAgent = !view.trackAgent;
     e.target.classList.toggle("active", view.trackAgent);
+  });
+  document.getElementById("show-knowledge").addEventListener("click", (e) => {
+    view.showAgentKnowledge = !view.showAgentKnowledge;
+    e.target.classList.toggle("active", view.showAgentKnowledge);
+    updateHud();
   });
 
   logEvent(`${agent.name} woke alone on the floodplain, with nothing but his hands.`, "milestone");

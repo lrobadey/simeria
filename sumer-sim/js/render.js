@@ -13,6 +13,7 @@ const view = {
   wetTiles: [], riverTiles: [], marshTiles: [],
   fireflies: [],
   glints: [],
+  showAgentKnowledge: false,
   px: CFG.WORLD * CFG.TILE,
 };
 
@@ -565,6 +566,85 @@ function drawLighting(ctx, tReal) {
   ctx.restore();
 }
 
+// ── Adapa's knowledge ──────────────────────────────────────────────────
+
+function drawMemoryMarker(ctx, x, y, color, radius = 3) {
+  const px = x * CFG.TILE;
+  const py = y * CFG.TILE;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(px, py, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(8, 6, 3, 0.75)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+}
+
+function drawFailedMemoryMarker(ctx, memory) {
+  const px = memory.x * CFG.TILE;
+  const py = memory.y * CFG.TILE;
+  ctx.strokeStyle = "rgba(210, 84, 64, 0.85)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(px - 3, py - 3);
+  ctx.lineTo(px + 3, py + 3);
+  ctx.moveTo(px + 3, py - 3);
+  ctx.lineTo(px - 3, py + 3);
+  ctx.stroke();
+}
+
+function drawAgentKnowledge(ctx) {
+  if (!view.showAgentKnowledge) return;
+  const knowledge = agent.mind.memory.land;
+  if (!knowledge) return;
+
+  const T = CFG.TILE;
+  ctx.save();
+  for (let y = 0; y < knowledge.height; y++) {
+    for (let x = 0; x < knowledge.width; x++) {
+      const lastSeen = knowledge.lastSeen[tileIndex(x, y)];
+      let alpha = 0.74;
+      if (lastSeen >= 0) {
+        const age = currentAgentDay() - lastSeen;
+        const fresh = clamp(1 - age / LAND_MEMORY_FADE_DAYS, 0, 1);
+        alpha = 0.07 + (1 - fresh) * 0.48;
+      }
+      if (alpha <= 0.08) continue;
+      ctx.fillStyle = `rgba(8, 7, 5, ${alpha})`;
+      ctx.fillRect(x * T, y * T, T, T);
+    }
+  }
+
+  ctx.globalCompositeOperation = "screen";
+  const sight = LAND_SIGHT_RADIUS * CFG.TILE;
+  const pulse = 0.5 + Math.sin(currentAgentDay() * 24) * 0.5;
+  ctx.strokeStyle = `rgba(224, 184, 100, ${0.25 + pulse * 0.12})`;
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(agent.x * T, agent.y * T, sight, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.globalCompositeOperation = "source-over";
+
+  const resources = agent.mind.memory.resources;
+  for (const memory of resources.forage) {
+    drawMemoryMarker(ctx, memory.x, memory.y, "rgba(116, 184, 82, 0.9)", 2.6);
+  }
+  for (const memory of resources.reeds) {
+    drawMemoryMarker(ctx, memory.x + 0.5, memory.y + 0.5, "rgba(188, 176, 82, 0.9)", 2.6);
+  }
+  for (const memory of resources.wood) {
+    drawMemoryMarker(ctx, memory.x, memory.y, "rgba(168, 112, 68, 0.9)", 2.8);
+  }
+  for (const memory of agent.mind.memory.shelterSites) {
+    drawMemoryMarker(ctx, memory.x, memory.y, "rgba(226, 172, 78, 0.95)", 3.4);
+  }
+  for (const memory of agent.mind.memory.failedTargets) {
+    if (currentAgentDay() < memory.until) drawFailedMemoryMarker(ctx, memory);
+  }
+
+  ctx.restore();
+}
+
 // ── Frame ───────────────────────────────────────────────────────────────
 
 // Leader line from the agent panel (bottom-left) out to wherever Adapa is,
@@ -623,6 +703,7 @@ function renderFrame(tReal) {
   drawAgent(ctx, tReal);
 
   drawLighting(ctx, tReal);
+  drawAgentKnowledge(ctx);
   drawAgentTracker(ctx, tReal);
 }
 
