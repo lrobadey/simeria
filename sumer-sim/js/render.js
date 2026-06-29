@@ -14,6 +14,7 @@ const view = {
   fireflies: [],
   glints: [],
   showAgentKnowledge: false,
+  showMind: false,
   px: CFG.WORLD * CFG.TILE,
 };
 
@@ -645,6 +646,32 @@ function drawAgentKnowledge(ctx) {
   ctx.restore();
 }
 
+// A thin line from Adapa to whatever his current project is reasoning about —
+// the spatial half of the glass mind, so "what" and "where" read together.
+function drawProjectTrace(ctx, tReal) {
+  if (!view.showMind || !agent.alive || !agent.target) return;
+  const t = agent.target;
+  if (typeof t.x !== "number" || typeof t.y !== "number") return;
+  const ax = agent.x * CFG.TILE, ay = agent.y * CFG.TILE;
+  const tx = t.x * CFG.TILE, ty = t.y * CFG.TILE;
+  const fleeing = agent.state === "flee";
+  ctx.save();
+  ctx.strokeStyle = fleeing ? "rgba(210, 96, 72, 0.7)" : "rgba(124, 155, 110, 0.6)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 4]);
+  ctx.lineDashOffset = -tReal * 0.03;
+  ctx.beginPath();
+  ctx.moveTo(ax, ay);
+  ctx.lineTo(tx, ty);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = ctx.strokeStyle;
+  ctx.beginPath();
+  ctx.arc(tx, ty, 2.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 // ── Frame ───────────────────────────────────────────────────────────────
 
 // Leader line from the agent panel (bottom-left) out to wherever Adapa is,
@@ -704,6 +731,7 @@ function renderFrame(tReal) {
 
   drawLighting(ctx, tReal);
   drawAgentKnowledge(ctx);
+  drawProjectTrace(ctx, tReal);
   drawAgentTracker(ctx, tReal);
 }
 

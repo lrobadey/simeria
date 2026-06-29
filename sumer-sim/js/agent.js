@@ -9,7 +9,6 @@ const SHELTER_REEDS_NEEDED = 24;
 const SHELTER_WOOD_NEEDED = 10;
 const SHELTER_BUILD_HOURS = 9;     // total work-hours of construction
 const FIRE_WOOD_PER_NIGHT = 1;
-const HUNGER_FORAGE_THRESHOLD = 0.4;
 const HUNGER_MEAL_THRESHOLD = 0.55;
 const HUNGER_URGENT_THRESHOLD = 0.7;
 const LAND_SIGHT_RADIUS = 18;
@@ -235,6 +234,16 @@ function rememberedShelterSite() {
   return best;
 }
 
+// Once he has a hearth, work stays within a home range. Food a long walk from
+// the hut is worth less than food at the doorstep — this is what keeps him from
+// drifting across the floodplain and stranding himself, the way a real camp
+// forages its surroundings and comes home each night.
+function homeBias(x, y) {
+  if (!(agent.shelter && agent.shelter.built)) return 1;
+  const d = Math.hypot(x - agent.shelter.x, y - agent.shelter.y);
+  return 1 / (1 + d * 0.045);
+}
+
 function findForageTarget() {
   // Candidate foods, each scored by yield over distance:
   //   ripe dates on mature palms · reed rhizomes in the marsh · grass seed
@@ -251,7 +260,7 @@ function findForageTarget() {
       if (tree.removed || tree.dead || tree.species !== "palm") continue;
       if (tree.fruit < 0.25 || agentAvoids(tree.x, tree.y)) continue;
       const d = Math.hypot(tree.x - agent.x, tree.y - agent.y);
-      options.push({ kind: "dates", tree, x: tree.x, y: tree.y, score: tree.fruit * 3 / (1 + d * distancePenalty) });
+      options.push({ kind: "dates", tree, x: tree.x, y: tree.y, score: tree.fruit * 3 / (1 + d * distancePenalty) * homeBias(tree.x, tree.y) });
     }
 
     // Sample tiles for rhizomes and seed rather than scanning the world.
@@ -262,11 +271,11 @@ function findForageTarget() {
       const tile = getTileF(agent.x + Math.cos(angle) * r, agent.y + Math.sin(angle) * r);
       if (!tile || agentAvoids(tile.x, tile.y)) continue;
       if (tile.terrain === "marsh" && tile.reeds > 0.45) {
-        options.push({ kind: "rhizomes", tile, x: tile.x + 0.5, y: tile.y + 0.5, score: tile.reeds * 1.2 / (1 + r * distancePenalty) });
+        options.push({ kind: "rhizomes", tile, x: tile.x + 0.5, y: tile.y + 0.5, score: tile.reeds * 1.2 / (1 + r * distancePenalty) * homeBias(tile.x, tile.y) });
       } else if (!isWaterTerrain(tile) && tile.grass > 0.6) {
         const dayOfYear = dayOfYearOf(sim.day);
         const seedSeason = dayOfYear > 110 && dayOfYear < 190 ? 1 : 0.25; // grain ripens early summer
-        options.push({ kind: "grain", tile, x: tile.x + 0.5, y: tile.y + 0.5, score: tile.grass * seedSeason / (1 + r * distancePenalty) });
+        options.push({ kind: "grain", tile, x: tile.x + 0.5, y: tile.y + 0.5, score: tile.grass * seedSeason / (1 + r * distancePenalty) * homeBias(tile.x, tile.y) });
       }
     }
 
@@ -346,6 +355,54 @@ function chooseShelterSite() {
   return best;
 }
 
+function findFishTarget() {
+  // Fish gather in the shallows he can wade into — flood pools and the reed
+  // marsh, not the open channel. Stand in the water and take what's there.
+  let best = null, bestScore = 0.25;
+  for (let i = 0; i < 90; i++) {
+    const angle = random() * Math.PI * 2;
+    const r = random() * 30;
+    const tile = getTileF(agent.x + Math.cos(angle) * r, agent.y + Math.sin(angle) * r);
+    if (!tile || !tile.fish || tile.fish < 0.3) continue;
+    if (!animalCanEnter(AGENT_SPECIES, tile) || agentAvoids(tile.x, tile.y)) continue;
+    const score = tile.fish / (1 + r * 0.05) * homeBias(tile.x, tile.y);
+    if (score > bestScore) { best = tile; bestScore = score; }
+  }
+  return best;
+}
+
+function nearbyFishOpportunity() {
+  // Cheap sense of whether fishable water is close — feeds the fish project's
+  // score without committing to a full search every appraisal.
+  let opportunity = 0;
+  for (let i = 0; i < 28; i++) {
+    const angle = random() * Math.PI * 2;
+    const r = random() * 20;
+    const tile = getTileF(agent.x + Math.cos(angle) * r, agent.y + Math.sin(angle) * r);
+    if (!tile || !tile.fish || tile.fish < 0.3) continue;
+    if (!animalCanEnter(AGENT_SPECIES, tile)) continue;
+    opportunity = Math.max(opportunity, clamp(tile.fish, 0, 1) * (1 - r / 24));
+  }
+  return clamp(opportunity, 0, 1);
+}
+
+function findFrontierTarget() {
+  // The pull of unseen country: cast rays outward and walk toward the
+  // direction whose land he knows least (or has half-forgotten).
+  const R = 30;
+  let best = null, bestScore = -Infinity;
+  for (let k = 0; k < 16; k++) {
+    const angle = (k / 16) * Math.PI * 2 + random() * 0.2;
+    const tx = clamp(agent.x + Math.cos(angle) * R, 1, world.width - 2);
+    const ty = clamp(agent.y + Math.sin(angle) * R, 1, world.height - 2);
+    const tile = getTileF(tx, ty);
+    if (!tile || isWaterTerrain(tile) || agentAvoids(tile.x, tile.y)) continue;
+    const stale = 1 - landMemoryFreshnessAt(tx, ty); // 1 = never seen
+    if (stale > bestScore) { bestScore = stale; best = { x: tx, y: ty }; }
+  }
+  return best;
+}
+
 // ── The decision loop ───────────────────────────────────────────────────
 
 function startEating(task) {
@@ -380,7 +437,7 @@ function nearestPredatorPressure() {
     const p = clamp(1 - d / 22, 0, 1);
     if (p > pressure) {
       pressure = p;
-      nearest = { species: a.species, distance: d };
+      nearest = { species: a.species, distance: d, x: a.x, y: a.y };
     }
   }
   return { pressure, nearest };
@@ -467,29 +524,6 @@ function assessPressures() {
   return pressures;
 }
 
-function answerHunger(urgentOnly = false) {
-  if (agent.state === "eatMeal") return false;
-
-  const inv = agent.inventory;
-  const eatThreshold = urgentOnly ? HUNGER_URGENT_THRESHOLD : HUNGER_MEAL_THRESHOLD;
-  if (agent.hunger > eatThreshold && inv.food > 0) {
-    startEating(urgentOnly ? "Eating from the pack" : "Eating");
-    return true;
-  }
-
-  const forageThreshold = urgentOnly ? HUNGER_URGENT_THRESHOLD : HUNGER_FORAGE_THRESHOLD;
-  const needsFoodNow = agent.hunger > forageThreshold && inv.food <= 0;
-  if (needsFoodNow) {
-    const forage = findForageTarget();
-    if (forage) {
-      seekForage(forage);
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function createBuildShelterProject() {
   return {
     kind: "buildShelter",
@@ -553,52 +587,86 @@ function completeActiveProject(kind) {
   }
 }
 
-function projectPriority(handler) {
-  return typeof handler.priority === "function" ? handler.priority() : handler.priority || 0;
+// ── Scoring spine ───────────────────────────────────────────────────────
+// Every project answers the same question with the same arithmetic:
+//   score = Σ(pressure answered) + opportunity + readiness − cost − risk
+// Each term is named so the glass-mind panel can show exactly why a project
+// won. The active project persists while it stays within a margin of the
+// best challenger (hysteresis) so Adapa commits instead of dithering.
+
+const SWITCH_MARGIN = 0.12;     // a challenger must lead the active by this to win
+const SWITCH_LOG_GAP = 0.3;     // game-days between narrated project switches
+
+function scored(terms) {
+  let value = 0;
+  for (const k in terms) value += terms[k];
+  return { value, terms };
 }
 
-function chooseProjectHandler() {
-  let best = null;
-  let bestScore = 0;
+function dominantTerm(terms) {
+  let name = "need", value = -Infinity;
+  for (const k in terms) {
+    if (terms[k] > value) { value = terms[k]; name = k; }
+  }
+  return { name, value };
+}
+
+function genericProject(kind) {
+  return { kind, status: "active", startedAt: currentAgentDay(), progress: 0, blockers: [] };
+}
+
+function rankProjects(pressures) {
+  const ranked = [];
   for (const handler of Object.values(PROJECT_HANDLERS)) {
     if (handler.isComplete && handler.isComplete()) continue;
-    const score = projectPriority(handler);
-    if (score > bestScore) {
-      best = handler;
-      bestScore = score;
-    }
+    const s = handler.score(pressures);
+    if (!s) continue;
+    ranked.push({
+      kind: handler.kind,
+      label: handler.label || handler.kind,
+      handler,
+      value: s.value,
+      terms: s.terms,
+    });
   }
-  return best;
+  ranked.sort((a, b) => b.value - a.value);
+  return ranked;
 }
 
-function refreshCompletedProjects() {
-  for (const handler of Object.values(PROJECT_HANDLERS)) {
-    if (!handler.isComplete || !handler.isComplete()) continue;
-    completeActiveProject(handler.kind);
-    if (handler.maintenanceGoal) {
-      setLongTermGoal(handler.maintenanceGoal.kind, handler.maintenanceGoal.reason);
-    }
-  }
-}
-
-function ensureProject(handler) {
-  setLongTermGoal(handler.goal.kind, handler.goal.reason);
-  if (!agent.mind.activeProject || agent.mind.activeProject.kind !== handler.kind ||
-      agent.mind.activeProject.status === "complete") {
-    agent.mind.activeProject = handler.create();
-  }
-  return agent.mind.activeProject;
-}
-
-function ensureActiveProject() {
-  refreshCompletedProjects();
-  const handler = chooseProjectHandler();
-  return handler ? ensureProject(handler) : null;
+function projectFor(handler) {
+  // Reuse the live project object when the kind is unchanged so progress and
+  // accumulated state (the half-built hut, gathered materials) carry over.
+  const active = agent.mind.activeProject;
+  if (active && active.kind === handler.kind && active.status !== "complete") return active;
+  return handler.create ? handler.create() : genericProject(handler.kind);
 }
 
 function pursueProject(project) {
   const handler = projectHandlerFor(project.kind);
   return !!(handler && handler.pursue && handler.pursue(project));
+}
+
+function maybeNarrateSwitch(cand) {
+  const day = currentAgentDay();
+  if (agent.mind.lastSwitchLogAt != null && day - agent.mind.lastSwitchLogAt < SWITCH_LOG_GAP) return;
+  agent.mind.lastSwitchLogAt = day;
+  const reason = dominantTerm(cand.terms).name;
+  logEvent(`${agent.name} turns to ${cand.label.toLowerCase()} — ${reason} weighs heaviest.`, "agent");
+}
+
+function commitToProject(cand, previousKind, ranked) {
+  agent.mind.projectScores = ranked.map((r) => ({
+    kind: r.kind, label: r.label, value: r.value, terms: r.terms, active: r.kind === cand.kind,
+  }));
+  agent.mind.activeProjectKind = cand.kind;
+  setLongTermGoal(cand.kind, cand.label);
+  if (previousKind !== null && previousKind !== cand.kind) {
+    agent.mind.lastSwitch = {
+      from: previousKind, to: cand.kind, reason: dominantTerm(cand.terms).name,
+      value: cand.value, at: currentAgentDay(),
+    };
+    maybeNarrateSwitch(cand);
+  }
 }
 
 function pursueBuildShelterProject(project) {
@@ -673,88 +741,317 @@ function pursueBuildShelterProject(project) {
 
 registerProjectHandler({
   kind: "buildShelter",
+  label: "Build shelter",
   goal: { kind: "buildShelter", reason: "Make a safer place to sleep" },
   maintenanceGoal: { kind: "maintainHome", reason: "Keep the first shelter useful" },
-  priority() {
-    return agent.shelter && agent.shelter.built ? 0 : 1;
-  },
   isComplete() {
     return !!(agent.shelter && agent.shelter.built);
+  },
+  score(p) {
+    const c = p.context;
+    const progress = agent.shelter ? agent.shelter.progress : 0;
+    return scored({
+      exposure: p.exposure * 1.0,
+      scarcity: p.scarcity * 0.15,
+      commit: progress * 0.5,           // finish what you started
+      night: -c.dark * 0.7,             // no building in the dark
+      hungry: -p.hunger * 0.5,          // don't raise a roof on an empty belly
+    });
   },
   create: createBuildShelterProject,
   pursue: pursueBuildShelterProject,
 });
 
-function decideAgent() {
-  assessPressures();
-  const sun = sunAltitude(sim.day);
+// ── Forage: answer hunger and a thin larder ─────────────────────────────
+function pursueForageProject() {
+  const forage = findForageTarget();
+  if (!forage) return false;
+  seekForage(forage, agent.shelter && agent.shelter.built ? "Foraging to stock the larder" : null);
+  return true;
+}
+
+registerProjectHandler({
+  kind: "forage",
+  label: "Forage",
+  goal: { kind: "forage", reason: "Keep fed" },
+  score(p) {
+    const c = p.context;
+    const food = agent.inventory.food;
+    const safe = clamp((3 - food) / 3, 0, 1);       // 1 when empty, 0 once ~3 stored
+    const sated = clamp(food / 4, 0, 1);            // full larder kills the urge
+    const need = clamp(p.hunger + safe - 0.3, 0, 1); // how pressing food is
+    return scored({
+      hunger: p.hunger * 0.5,
+      larder: safe * 0.8,                           // hold a buffer before anything optional
+      urgent: need * need * 0.6,                    // ramps hard, hungry and empty
+      opportunity: c.opportunities.forage * 0.2 * safe,
+      sated: -sated * 0.35,
+      night: -c.dark * 0.55 * (1 - need * 0.5),     // sleep through the dark unless famine
+    });
+  },
+  pursue: pursueForageProject,
+});
+
+// ── Fish: take food from wadeable shallows when they're rich ────────────
+function pursueFishProject() {
+  const tile = findFishTarget();
+  if (!tile) return false;
+  agent.state = "goto";
+  agent.target = { x: tile.x + 0.5, y: tile.y + 0.5, then: "fish" };
+  agent.task = "Wading out to fish";
+  return true;
+}
+
+registerProjectHandler({
+  kind: "fish",
+  label: "Fish",
+  goal: { kind: "fish", reason: "Take fish from the shallows" },
+  score(p) {
+    const c = p.context;
+    const opportunity = nearbyFishOpportunity();
+    if (opportunity <= 0) return null;
+    const food = agent.inventory.food;
+    const safe = clamp((3 - food) / 3, 0, 1);
+    return scored({
+      hunger: p.hunger * 0.5,
+      larder: safe * 0.75 * opportunity,          // a reliable larder when forage thins
+      opportunity: opportunity * 0.3,
+      sated: -clamp(food / 4, 0, 1) * 0.3,
+      night: -c.dark * 0.55 * (1 - safe * 0.5),
+    });
+  },
+  pursue: pursueFishProject,
+});
+
+// ── Rest: sleep through the dark and the body's exhaustion ───────────────
+function pursueRestProject() {
   const inv = agent.inventory;
-
-  // Hunger is a body need, not a daytime errand. If it is strong enough, it
-  // displaces sleep and work through the same path as every other decision.
-  if (answerHunger()) return;
-
-  // Night: get home (or hunker down) and sleep.
-  if (sun < -0.02 && agent.energy < 0.92) {
-    if (agent.shelter && agent.shelter.built) {
-      const d = Math.hypot(agent.x - agent.shelter.x, agent.y - agent.shelter.y);
-      if (d > 1) {
-        agent.state = "goto";
-        agent.target = { x: agent.shelter.x, y: agent.shelter.y, then: "sleep" };
-        agent.task = "Heading home for the night";
-        return;
-      }
-      if (!agent.shelter.fireLit && inv.wood >= FIRE_WOOD_PER_NIGHT) {
-        inv.wood -= FIRE_WOOD_PER_NIGHT;
-        agent.shelter.fireLit = true;
-        agent.shelter.fuel = 1;
-        logEvent(`${agent.name} lit the hearth fire.`, "agent");
-      }
+  // Too spent to travel: drop where he stands rather than chase a far hearth
+  // he may not even reach. Otherwise he heads home, so he never drifts far.
+  const exhausted = agent.energy < 0.15;
+  if (agent.shelter && agent.shelter.built && !exhausted) {
+    const d = Math.hypot(agent.x - agent.shelter.x, agent.y - agent.shelter.y);
+    if (d > 1) {
+      agent.state = "goto";
+      agent.target = { x: agent.shelter.x, y: agent.shelter.y, then: "sleep" };
+      agent.task = "Heading home to rest";
+      return true;
     }
-    agent.state = "sleep";
-    agent.task = agent.shelter && agent.shelter.built ? "Sleeping by the hearth" : "Sleeping under the open sky";
-    agent.stateUntil = sim.day + 0.05;
-    return;
-  }
-
-  if (inv.food < 1) {
-    const forage = findForageTarget();
-    if (forage) {
-      seekForage(forage);
-      return;
+    if (!agent.shelter.fireLit && nightness(sim.day) > 0.2 && inv.wood >= FIRE_WOOD_PER_NIGHT) {
+      inv.wood -= FIRE_WOOD_PER_NIGHT;
+      agent.shelter.fireLit = true;
+      agent.shelter.fuel = 1;
+      logEvent(`${agent.name} lit the hearth fire.`, "agent");
     }
   }
+  agent.state = "sleep";
+  agent.task = agent.shelter && agent.shelter.built ? "Sleeping by the hearth" : "Sleeping under the open sky";
+  agent.stateUntil = sim.day + 0.05;
+  return true;
+}
 
-  const project = ensureActiveProject();
-  if (project && pursueProject(project)) {
-    return;
+registerProjectHandler({
+  kind: "rest",
+  label: "Rest",
+  goal: { kind: "rest", reason: "Recover strength" },
+  score(p) {
+    const c = p.context;
+    // Below a fifth of full, the body simply gives out — rest overrides almost
+    // everything, the way exhaustion forces sleep on a real animal.
+    const collapse = clamp((0.2 - agent.energy) / 0.2, 0, 1) * 1.2;
+    return scored({
+      fatigue: p.fatigue * 1.0,
+      collapse,
+      night: c.dark * 0.55,
+      daycost: -(1 - c.dark) * 0.15,    // resting in daylight wastes good light
+    });
+  },
+  pursue: pursueRestProject,
+});
+
+// ── Gather fuel: keep the hearth fed once there's a hearth ──────────────
+function pursueGatherFuelProject() {
+  const tree = findWoodTarget();
+  if (!tree) return false;
+  agent.state = "goto";
+  agent.targetTree = tree;
+  agent.target = { x: tree.x, y: tree.y, then: "gatherWood" };
+  agent.task = "Gathering firewood";
+  return true;
+}
+
+registerProjectHandler({
+  kind: "gatherFuel",
+  label: "Gather fuel",
+  goal: { kind: "gatherFuel", reason: "Keep the hearth burning" },
+  score(p) {
+    const c = p.context;
+    const built = agent.shelter && agent.shelter.built;
+    if (!built) return null;
+    const woodNeed = clamp((4 - agent.inventory.wood) / 4, 0, 1);
+    if (woodNeed <= 0) return null;
+    return scored({
+      cold: woodNeed * (0.4 + c.dark * 0.3),
+      opportunity: c.opportunities.wood * 0.2,
+      night: -c.dark * 0.5,
+    });
+  },
+  pursue: pursueGatherFuelProject,
+});
+
+// ── Explore: the pull of unseen country ─────────────────────────────────
+function pursueExploreProject() {
+  const target = findFrontierTarget();
+  if (!target) return false;
+  agent.state = "goto";
+  agent.target = { x: target.x, y: target.y, then: "survey" };
+  agent.task = "Walking out to learn the land";
+  return true;
+}
+
+registerProjectHandler({
+  kind: "explore",
+  label: "Explore",
+  goal: { kind: "explore", reason: "Learn the land" },
+  score(p) {
+    const c = p.context;
+    const stock = clamp(agent.inventory.food / 3, 0, 1); // only roam on a full larder
+    return scored({
+      curiosity: p.curiosity * 0.45 * stock,
+      scarcity: p.scarcity * 0.15,
+      larderGate: -(1 - stock) * 0.5,   // never wander off hungry
+      night: -c.dark * 0.6,
+      hungry: -p.hunger * 0.4,
+      restless: -0.05,                  // the lowest-priority filler
+    });
+  },
+  pursue: pursueExploreProject,
+});
+
+// ── Relocate: abandon ground that keeps failing ─────────────────────────
+registerProjectHandler({
+  kind: "relocate",
+  label: "Move camp",
+  goal: { kind: "relocate", reason: "Find better ground" },
+  score(p) {
+    if (!(agent.shelter && agent.shelter.built)) return null;
+    const home = getTileF(agent.shelter.x, agent.shelter.y);
+    const homeFlood = home ? clamp(liveWaterDepth(home) / 0.01, 0, 1) : 0;
+    const trigger = Math.max(homeFlood, p.context.blocked * 0.5);
+    if (trigger < 0.5) return null;
+    return scored({
+      exposure: p.exposure * 0.6,
+      scarcity: p.scarcity * 0.3,
+      failing: trigger * 0.5,
+    });
+  },
+  pursue() {
+    // Walk away from the doomed ground; forgetting the old site lets the
+    // build project found a new home elsewhere.
+    logEvent(`${agent.name} abandons his house — the ground keeps failing him.`, "agent");
+    agent.shelter = null;
+    agent.mind.memory.shelterSites = [];
+    return false; // hand off to buildShelter, which now scores high again
+  },
+});
+
+const FLEE_RADIUS = 9;
+
+// Eat from the pack — a reflex, above deliberation, like an animal's "flee >
+// drink > eat" prefix. Acquiring food is a scored project; swallowing is not.
+function eatReflex(urgent) {
+  if (agent.state === "eatMeal") return false;
+  const threshold = urgent ? HUNGER_URGENT_THRESHOLD : HUNGER_MEAL_THRESHOLD;
+  if (agent.hunger > threshold && agent.inventory.food > 0) {
+    startEating(urgent ? "Eating from the pack" : "Eating");
+    return true;
   }
+  return false;
+}
 
+// Imminent danger overrides everything: drop the errand and run.
+function answerDanger(pressures) {
+  const threat = pressures.context.predator;
+  if (!threat || threat.distance > FLEE_RADIUS) return false;
+  // The hut is refuge: safe at his own hearth, he stays put and lets the
+  // beast prowl rather than bolting in and out all night.
+  if (agent.shelter && agent.shelter.built &&
+      Math.hypot(agent.x - agent.shelter.x, agent.y - agent.shelter.y) < 2.5) return false;
+  if (agent.state === "flee" && agent.target) { agent.fleeFrom = threat; return true; }
+
+  let dx = agent.x - threat.x, dy = agent.y - threat.y;
+  const d = Math.hypot(dx, dy) || 1;
+  dx /= d; dy /= d;
+  // Run for the hearth if home lies away from the threat; else straight away.
+  let tx = agent.x + dx * 14, ty = agent.y + dy * 14;
   if (agent.shelter && agent.shelter.built) {
-    // Homeowner life: keep the larder and woodpile stocked.
-    if (inv.food < 3) {
-      const forage = findForageTarget();
-      if (forage) {
-        seekForage(forage, "Foraging to stock the larder");
-        return;
-      }
-    }
-    if (inv.wood < 4) {
-      const tree = findWoodTarget();
-      if (tree) {
-        agent.state = "goto";
-        agent.targetTree = tree;
-        agent.target = { x: tree.x, y: tree.y, then: "gatherWood" };
-        agent.task = "Gathering firewood";
-        return;
-      }
-    }
+    const hx = agent.shelter.x - agent.x, hy = agent.shelter.y - agent.y;
+    if (hx * dx + hy * dy > 0) { tx = agent.shelter.x; ty = agent.shelter.y; }
   }
+  agent.state = "flee";
+  agent.fleeFrom = threat;
+  agent.target = {
+    x: clamp(tx, 1, world.width - 1),
+    y: clamp(ty, 1, world.height - 1),
+    then: "survey",
+  };
+  agent.task = `Fleeing a ${threat.species}`;
+  const day = currentAgentDay();
+  if (agent.mind.activeProjectKind !== "flee" &&
+      (agent.mind.lastFleeLogAt == null || day - agent.mind.lastFleeLogAt > 0.1)) {
+    agent.mind.lastFleeLogAt = day;
+    logEvent(`${agent.name} flees a ${threat.species}.`, "agent");
+  }
+  agent.mind.activeProjectKind = "flee";
+  return true;
+}
 
-  // Nothing pressing: rest by the water, watch the land.
+function agentIdle() {
   agent.state = "idle";
   agent.task = agent.shelter && agent.shelter.built ? "Resting at home" : "Surveying the land";
   agent.stateUntil = sim.day + 0.02 + random() * 0.03;
+  agent.mind.activeProjectKind = agent.shelter && agent.shelter.built ? "rest" : "explore";
+}
+
+// Sense → appraise → compete → act. Pressures decide; the ladder is gone.
+// updateAgent refreshes pressures every substep, so reuse them when fresh.
+function decideAgent() {
+  const pressures = agent.mind.pressures || assessPressures();
+
+  // Reflexes sit above the appraisal so survival never waits on deliberation.
+  if (answerDanger(pressures)) return;
+  if (eatReflex(false)) return;
+
+  const ranked = rankProjects(pressures);
+  if (ranked.length === 0) { agentIdle(); return; }
+
+  const previousKind = agent.mind.activeProject && agent.mind.activeProject.status !== "complete"
+    ? agent.mind.activeProject.kind : null;
+
+  // Hysteresis: keep the running project unless a challenger clearly beats it.
+  let intended = ranked[0];
+  if (previousKind) {
+    const active = ranked.find((r) => r.kind === previousKind);
+    if (active && ranked[0].value - active.value < SWITCH_MARGIN) intended = active;
+  }
+
+  // Try the chosen project; if it can't find a target right now, fall through
+  // to the next best that can. A blocked project records why.
+  const order = [intended, ...ranked.filter((r) => r !== intended)];
+  for (const cand of order) {
+    const project = projectFor(cand.handler);
+    if (pursueProject(project)) {
+      agent.mind.activeProject = project;
+      commitToProject(cand, previousKind, ranked);
+      return;
+    }
+    cand.blocked = true;
+  }
+
+  agent.mind.projectScores = ranked.map((r) => ({
+    kind: r.kind, label: r.label, value: r.value, terms: r.terms, active: false, blocked: r.blocked,
+  }));
+  agentIdle();
 }
 
 const AGENT_SPECIES = { wades: true }; // he can wade a lagoon, not the river
@@ -773,13 +1070,17 @@ function updateAgent(dtDays) {
     agent.stateUntil = sim.day + 0.05;
   }
 
-  // Real hunger interrupts whatever he's doing: he eats from the pack or drops
-  // the errand to find food. Sleep is not special; it is just another task.
-  if (agent.hunger > HUNGER_URGENT_THRESHOLD &&
-      (agent.inventory.food > 0 ||
-        (agent.state !== "forage" && (!agent.target || agent.target.then !== "forage")))) {
-    answerHunger(true);
+  // Reflexive interrupts, above the appraisal loop. Eat from the pack the
+  // instant hunger bites; a predator inside flight range scatters any errand.
+  if (agent.hunger > HUNGER_URGENT_THRESHOLD && agent.inventory.food > 0) {
+    eatReflex(true);
   }
+  const threat = agent.mind.pressures.context.predator;
+  const fleeNow = threat && threat.distance < FLEE_RADIUS && agent.state !== "flee";
+  const starvingIdle = agent.hunger > HUNGER_URGENT_THRESHOLD && agent.inventory.food <= 0 &&
+    agent.state !== "forage" && agent.state !== "fish" &&
+    !(agent.target && (agent.target.then === "forage" || agent.target.then === "fish"));
+  if (fleeNow || starvingIdle) decideAgent();
 
   if (agent.hunger >= 1.2 && !(agent.state === "eatMeal" && agent.inventory.food > 0)) {
     agent.alive = false;
@@ -796,22 +1097,25 @@ function updateAgent(dtDays) {
     case "goto": {
       const t = agent.target;
       if (!t) { decideAgent(); break; }
-      const fromX = agent.x, fromY = agent.y;
+      // Track real progress *toward the target*, not just any movement. A
+      // straight walker on a delta slides along a lagoon bank — moving, but
+      // never getting closer. If the gap to the target stops shrinking, the
+      // route is blocked: write the place off and choose differently.
+      if (agent.gotoRef !== t) { agent.gotoRef = t; agent.gotoBest = Infinity; agent.blockedTime = 0; }
       const arrived = moveToward(agent, AGENT_SPECIES, t.x, t.y, agentSpeed(), dtDays);
-      // No progress means the straight path is water he can't cross. Give
-      // it a few minutes of bank-sliding, then write the place off for a
-      // day and choose differently.
-      if (!arrived && dist2(fromX, fromY, agent.x, agent.y) < 1e-8) {
+      const d2 = dist2(agent.x, agent.y, t.x, t.y);
+      if (d2 < agent.gotoBest - 0.05) {
+        agent.gotoBest = d2;
+        agent.blockedTime = 0;
+      } else if (!arrived) {
         agent.blockedTime += dtDays;
-        if (agent.blockedTime > 0.004) {
+        if (agent.blockedTime > 0.012) { // ~17 game-minutes of no progress
           agent.blockedTime = 0;
           rememberFailedTarget(t, "blocked");
           agent.target = null;
           decideAgent();
           break;
         }
-      } else {
-        agent.blockedTime = 0;
       }
       if (arrived) {
         const then = t.then;
@@ -819,6 +1123,7 @@ function updateAgent(dtDays) {
         agent.stateUntil = sim.day + 1; // work states end themselves
         if (then === "forage") agent.forage = t.forage;
         if (then === "sleep") { agent.stateUntil = sim.day + 0.01; decideAgent(); }
+        if (then === "survey") { decideAgent(); }
       }
       break;
     }
@@ -828,8 +1133,11 @@ function updateAgent(dtDays) {
         Math.hypot(agent.x - agent.shelter.x, agent.y - agent.shelter.y) < 2 ? 1.4 : 0.9;
       agent.energy = clamp(agent.energy + dtDays * 2.2 * recovery, 0, 1);
       const sun = sunAltitude(sim.day);
-      if (sun > 0.02 && agent.energy > 0.5) {
-        logEvent(`${agent.name} rose with the sun.`, "agent");
+      if (sun > 0.02 && agent.energy > 0.55) {
+        if (agent.mind.lastRoseAt == null || currentAgentDay() - agent.mind.lastRoseAt > 0.4) {
+          agent.mind.lastRoseAt = currentAgentDay();
+          logEvent(`${agent.name} rose with the sun.`, "agent");
+        }
         decideAgent();
       }
       break;
@@ -925,6 +1233,34 @@ function updateAgent(dtDays) {
         logEvent(`${agent.name} finished his reed house. The first roof in Sumer.`, "milestone");
         decideAgent();
       }
+      break;
+    }
+
+    case "flee": {
+      const danger = nearestPredatorPressure().nearest;
+      if (!danger || danger.distance > FLEE_RADIUS * 1.7) { agent.fleeFrom = null; decideAgent(); break; }
+      let dx = agent.x - danger.x, dy = agent.y - danger.y;
+      const d = Math.hypot(dx, dy) || 1;
+      let tx = agent.x + (dx / d) * 12, ty = agent.y + (dy / d) * 12;
+      if (agent.shelter && agent.shelter.built &&
+          (agent.shelter.x - agent.x) * dx + (agent.shelter.y - agent.y) * dy > 0) {
+        tx = agent.shelter.x; ty = agent.shelter.y;
+      }
+      agent.target = { x: clamp(tx, 1, world.width - 1), y: clamp(ty, 1, world.height - 1), then: "survey" };
+      agent.task = `Fleeing a ${danger.species}`;
+      moveToward(agent, AGENT_SPECIES, agent.target.x, agent.target.y, agentSpeed() * 1.8, dtDays);
+      break;
+    }
+
+    case "fish": {
+      const tile = getTileF(agent.x, agent.y);
+      if (!tile || !tile.fish || tile.fish <= 0.08) { decideAgent(); break; }
+      rememberResource("forage", { x: agent.x, y: agent.y }, tile.fish);
+      const got = Math.min(tile.fish, dtDays * 24 * 0.25);
+      tile.fish -= got;
+      agent.inventory.food += got * 2.2; // fish are calorie-rich
+      agent.task = "Fishing the shallows";
+      if (agent.inventory.food > 4 || tile.fish <= 0.08) decideAgent();
       break;
     }
 
