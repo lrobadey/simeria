@@ -85,6 +85,15 @@ function landMemoryFreshnessAt(x, y) {
   return clamp(1 - (currentAgentDay() - lastSeen) / LAND_MEMORY_FADE_DAYS, 0, 1);
 }
 
+function knowsLandAt(x, y) {
+  return landMemoryFreshnessAt(x, y) > 0;
+}
+
+function knownTileScore(tile) {
+  if (!tile) return 0;
+  return landMemoryFreshnessAt(tile.x + 0.5, tile.y + 0.5);
+}
+
 const agent = {
   name: "Adapa",
   x: 0, y: 0,
@@ -188,12 +197,14 @@ function rememberedForageTarget() {
   for (const memory of agent.mind.memory.resources.forage) {
     const forage = memory.forage;
     if (!forage || agentAvoids(memory.x, memory.y)) continue;
+    const landFreshness = landMemoryFreshnessAt(memory.x, memory.y);
+    if (landFreshness <= 0) continue;
     if (forage.kind === "dates") {
       if (!forage.tree || forage.tree.removed || forage.tree.dead || forage.tree.fruit <= 0.03) continue;
     } else if (!forage.tile || forage.tile[forage.kind === "rhizomes" ? "reeds" : "grass"] <= 0.05) {
       continue;
     }
-    const score = (memory.score || 0) * memoryFreshness(memory, 20);
+    const score = (memory.score || 0) * memoryFreshness(memory, 20) * landFreshness;
     if (score > bestScore) { best = forage; bestScore = score; }
   }
   return best;
@@ -204,7 +215,9 @@ function rememberedReedTarget() {
   for (const memory of agent.mind.memory.resources.reeds) {
     const tile = memory.target;
     if (!tile || tile.reeds <= 0.06 || isWaterTerrain(tile) || agentAvoids(tile.x, tile.y)) continue;
-    const score = tile.reeds * memoryFreshness(memory, 12) / (1 + Math.hypot(tile.x - agent.x, tile.y - agent.y) * 0.02);
+    const landFreshness = knownTileScore(tile);
+    if (landFreshness <= 0) continue;
+    const score = tile.reeds * memoryFreshness(memory, 12) * landFreshness / (1 + Math.hypot(tile.x - agent.x, tile.y - agent.y) * 0.02);
     if (score > bestScore) { best = tile; bestScore = score; }
   }
   return best;
@@ -215,9 +228,11 @@ function rememberedWoodTarget() {
   for (const memory of agent.mind.memory.resources.wood) {
     const tree = memory.target;
     if (!tree || tree.removed || agentAvoids(tree.x, tree.y)) continue;
+    const landFreshness = landMemoryFreshnessAt(tree.x, tree.y);
+    if (landFreshness <= 0) continue;
     const yieldScore = tree.dead ? tree.wood * 2 : (tree.species === "tamarisk" && treeIsMature(tree) ? 1 : 0);
     if (yieldScore <= 0) continue;
-    const score = yieldScore * memoryFreshness(memory, 30) / (1 + Math.hypot(tree.x - agent.x, tree.y - agent.y) * 0.03);
+    const score = yieldScore * memoryFreshness(memory, 30) * landFreshness / (1 + Math.hypot(tree.x - agent.x, tree.y - agent.y) * 0.03);
     if (score > bestScore) { best = tree; bestScore = score; }
   }
   return best;
@@ -228,7 +243,9 @@ function rememberedShelterSite() {
   for (const memory of agent.mind.memory.shelterSites) {
     const tile = memory.tile;
     if (!tile || isWaterTerrain(tile) || tile.pondingDepth > 0 || agentAvoids(tile.x, tile.y)) continue;
-    const score = (memory.score || 0) * memoryFreshness(memory, 60) -
+    const landFreshness = knownTileScore(tile);
+    if (landFreshness <= 0) continue;
+    const score = (memory.score || 0) * memoryFreshness(memory, 60) * landFreshness -
       Math.hypot(tile.x - agent.x, tile.y - agent.y) * 0.01;
     if (score > bestScore) { best = tile; bestScore = score; }
   }
@@ -249,9 +266,11 @@ function findForageTarget() {
 
     for (const tree of treesNear(agent.x, agent.y, radius + 10)) {
       if (tree.removed || tree.dead || tree.species !== "palm") continue;
+      const landFreshness = landMemoryFreshnessAt(tree.x, tree.y);
+      if (landFreshness <= 0) continue;
       if (tree.fruit < 0.25 || agentAvoids(tree.x, tree.y)) continue;
       const d = Math.hypot(tree.x - agent.x, tree.y - agent.y);
-      options.push({ kind: "dates", tree, x: tree.x, y: tree.y, score: tree.fruit * 3 / (1 + d * distancePenalty) });
+      options.push({ kind: "dates", tree, x: tree.x, y: tree.y, score: tree.fruit * 3 * landFreshness / (1 + d * distancePenalty) });
     }
 
     // Sample tiles for rhizomes and seed rather than scanning the world.
@@ -261,12 +280,14 @@ function findForageTarget() {
       const r = random() * radius;
       const tile = getTileF(agent.x + Math.cos(angle) * r, agent.y + Math.sin(angle) * r);
       if (!tile || agentAvoids(tile.x, tile.y)) continue;
+      const landFreshness = knownTileScore(tile);
+      if (landFreshness <= 0) continue;
       if (tile.terrain === "marsh" && tile.reeds > 0.45) {
-        options.push({ kind: "rhizomes", tile, x: tile.x + 0.5, y: tile.y + 0.5, score: tile.reeds * 1.2 / (1 + r * distancePenalty) });
+        options.push({ kind: "rhizomes", tile, x: tile.x + 0.5, y: tile.y + 0.5, score: tile.reeds * 1.2 * landFreshness / (1 + r * distancePenalty) });
       } else if (!isWaterTerrain(tile) && tile.grass > 0.6) {
         const dayOfYear = dayOfYearOf(sim.day);
         const seedSeason = dayOfYear > 110 && dayOfYear < 190 ? 1 : 0.25; // grain ripens early summer
-        options.push({ kind: "grain", tile, x: tile.x + 0.5, y: tile.y + 0.5, score: tile.grass * seedSeason / (1 + r * distancePenalty) });
+        options.push({ kind: "grain", tile, x: tile.x + 0.5, y: tile.y + 0.5, score: tile.grass * seedSeason * landFreshness / (1 + r * distancePenalty) });
       }
     }
 
@@ -292,7 +313,9 @@ function findReedTarget() {
       const r = random() * radius;
       const tile = getTileF(agent.x + Math.cos(angle) * r, agent.y + Math.sin(angle) * r);
       if (!tile || isWaterTerrain(tile) || agentAvoids(tile.x, tile.y)) continue;
-      const score = tile.reeds / (1 + r * (radius > 40 ? 0.008 : 0.05));
+      const landFreshness = knownTileScore(tile);
+      if (landFreshness <= 0) continue;
+      const score = tile.reeds * landFreshness / (1 + r * (radius > 40 ? 0.008 : 0.05));
       if (score > bestScore) { best = tile; bestScore = score; }
     }
     if (best) {
@@ -307,18 +330,24 @@ function findWoodTarget() {
   const remembered = rememberedWoodTarget();
   if (remembered) return remembered;
 
-  let best = null, bestScore = 0;
-  const radius = treesNear(agent.x, agent.y, 50).length > 0 ? 50 : 130;
-  for (const tree of treesNear(agent.x, agent.y, radius)) {
-    if (tree.removed || agentAvoids(tree.x, tree.y)) continue;
-    const d = Math.hypot(tree.x - agent.x, tree.y - agent.y);
-    // Deadwood is free fuel; a living tamarisk can spare branches slowly.
-    const yieldScore = tree.dead ? tree.wood * 2 : (tree.species === "tamarisk" && treeIsMature(tree) ? 1 : 0);
-    const score = yieldScore / (1 + d * 0.05);
-    if (score > bestScore) { best = tree; bestScore = score; }
+  for (const radius of [50, 130]) {
+    let best = null, bestScore = 0;
+    for (const tree of treesNear(agent.x, agent.y, radius)) {
+      if (tree.removed || agentAvoids(tree.x, tree.y)) continue;
+      const landFreshness = landMemoryFreshnessAt(tree.x, tree.y);
+      if (landFreshness <= 0) continue;
+      const d = Math.hypot(tree.x - agent.x, tree.y - agent.y);
+      // Deadwood is free fuel; a living tamarisk can spare branches slowly.
+      const yieldScore = tree.dead ? tree.wood * 2 : (tree.species === "tamarisk" && treeIsMature(tree) ? 1 : 0);
+      const score = yieldScore * landFreshness / (1 + d * 0.05);
+      if (score > bestScore) { best = tree; bestScore = score; }
+    }
+    if (best) {
+      rememberResource("wood", best, bestScore);
+      return best;
+    }
   }
-  if (best) rememberResource("wood", best, bestScore);
-  return best;
+  return null;
 }
 
 function chooseShelterSite() {
@@ -327,8 +356,14 @@ function chooseShelterSite() {
   const remembered = rememberedShelterSite();
   if (remembered) return remembered;
 
+  const knowledge = ensureLandKnowledge();
   let best = null, bestScore = -Infinity;
-  for (const tile of world.tiles) {
+  for (let i = 0; i < knowledge.lastSeen.length; i++) {
+    const lastSeen = knowledge.lastSeen[i];
+    if (lastSeen < 0) continue;
+    const landFreshness = clamp(1 - (currentAgentDay() - lastSeen) / LAND_MEMORY_FADE_DAYS, 0, 1);
+    if (landFreshness <= 0) continue;
+    const tile = world.tiles[i];
     if (isWaterTerrain(tile) || tile.pondingDepth > 0) continue;
     const d = Math.hypot(tile.x - agent.x, tile.y - agent.y);
     if (d > 50) continue;
@@ -336,14 +371,54 @@ function chooseShelterSite() {
     const waterProx = 1 - clamp((tile.distanceToRiver - 2) / 10, 0, 1);
     const tooClose = tile.distanceToRiver < 2 ? -2 : 0; // flood risk on the bank itself
     const raised = clamp((tile.elevation - CFG.SEA_LEVEL - 0.02) / 0.06, 0, 1);
-    const food = tile.grassCap + tile.reedCap * 0.5 + (treesNear(tile.x, tile.y, 8).length > 0 ? 0.6 : 0);
+    const treeFood = treesNear(tile.x, tile.y, 8).some((tree) => knowsLandAt(tree.x, tree.y)) ? 0.6 : 0;
+    const food = tile.grassCap + tile.reedCap * 0.5 + treeFood;
     const fresh = 1 - tile.salinity;
 
-    const score = waterProx * 2 + raised * 1.2 + food + fresh + tooClose - d * 0.01;
+    const score = (waterProx * 2 + raised * 1.2 + food + fresh + tooClose) * landFreshness - d * 0.01;
     if (score > bestScore) { bestScore = score; best = tile; }
   }
   if (best) rememberShelterSite(best, bestScore);
   return best;
+}
+
+function chooseKnownFrontierTarget() {
+  const knowledge = ensureLandKnowledge();
+  let best = null, bestScore = -Infinity;
+  for (let i = 0; i < knowledge.lastSeen.length; i++) {
+    const lastSeen = knowledge.lastSeen[i];
+    if (lastSeen < 0) continue;
+    const landFreshness = clamp(1 - (currentAgentDay() - lastSeen) / LAND_MEMORY_FADE_DAYS, 0, 1);
+    if (landFreshness <= 0) continue;
+    const tile = world.tiles[i];
+    if (!tile || isWaterTerrain(tile) || tile.pondingDepth > 0 || agentAvoids(tile.x, tile.y)) continue;
+    const d = Math.hypot(tile.x + 0.5 - agent.x, tile.y + 0.5 - agent.y);
+    if (d < 8 || d > LAND_SIGHT_RADIUS * 1.8) continue;
+
+    let unknownNeighbors = 0;
+    for (const [dx, dy] of NEIGHBORS_8) {
+      const nx = tile.x + dx;
+      const ny = tile.y + dy;
+      if (nx < 0 || ny < 0 || nx >= knowledge.width || ny >= knowledge.height) continue;
+      if (knowledge.lastSeen[tileIndex(nx, ny)] < 0) unknownNeighbors++;
+    }
+    if (unknownNeighbors <= 0) continue;
+
+    const water = 1 - clamp(tile.distanceToRiver / 14, 0, 1);
+    const score = unknownNeighbors * 0.7 + water * 0.5 + landFreshness * 0.4 - d * 0.015 + random() * 0.1;
+    if (score > bestScore) { best = tile; bestScore = score; }
+  }
+  return best;
+}
+
+function exploreKnownFrontier(task = "Walking the known edge") {
+  const tile = chooseKnownFrontierTarget();
+  if (!tile) return false;
+  agent.state = "goto";
+  agent.target = { x: tile.x + 0.5, y: tile.y + 0.5, then: "idle" };
+  agent.task = task;
+  agent.stateUntil = sim.day + 1;
+  return true;
 }
 
 // ── The decision loop ───────────────────────────────────────────────────
@@ -392,15 +467,20 @@ function nearbyOpportunityPressure() {
   let wood = 0;
 
   for (const memory of agent.mind.memory.resources.forage) {
-    forage = Math.max(forage, (memory.score || 0) * memoryFreshness(memory, 16));
+    const landFreshness = landMemoryFreshnessAt(memory.x, memory.y);
+    if (landFreshness > 0) {
+      forage = Math.max(forage, (memory.score || 0) * memoryFreshness(memory, 16) * landFreshness);
+    }
   }
   for (const tree of treesNear(agent.x, agent.y, 18)) {
+    const landFreshness = landMemoryFreshnessAt(tree.x, tree.y);
+    if (landFreshness <= 0) continue;
     if (tree.removed || tree.dead) {
-      wood = Math.max(wood, tree.wood || 0);
+      wood = Math.max(wood, (tree.wood || 0) * landFreshness);
       continue;
     }
-    if (tree.species === "palm") forage = Math.max(forage, tree.fruit * 1.4);
-    if (tree.species === "tamarisk" && treeIsMature(tree)) wood = Math.max(wood, 0.5);
+    if (tree.species === "palm") forage = Math.max(forage, tree.fruit * 1.4 * landFreshness);
+    if (tree.species === "tamarisk" && treeIsMature(tree)) wood = Math.max(wood, 0.5 * landFreshness);
   }
   for (const a of animals) {
     if (a.dead || !SPECIES[a.species].prey) continue;
@@ -666,6 +746,16 @@ function pursueBuildShelterProject(project) {
       return true;
     }
     project.blockers.push("noShelterSite");
+  }
+
+  if (project.blockers.length > 0) {
+    const task = project.blockers.includes("noKnownReeds") ? "Searching the known edge for reeds" :
+      project.blockers.includes("noKnownWood") ? "Searching the known edge for wood" :
+      "Searching the known edge for a building site";
+    if (exploreKnownFrontier(task)) {
+      setDailyIntent(project, "explore", { blockers: project.blockers.slice() });
+      return true;
+    }
   }
 
   return false;
