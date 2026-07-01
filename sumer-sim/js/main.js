@@ -125,6 +125,64 @@ function updateHud() {
   document.getElementById("agent-panel").innerHTML =
     `<strong>${agent.name}</strong> — ${agent.task}<br />` +
     `${needs}<br />` + stock + pressureLine + knowledgeLine;
+
+  renderMindPanel();
+}
+
+// ── The glass mind: pressures and the project slate, scored live ─────────
+
+const PRESSURE_ORDER = ["hunger", "fatigue", "exposure", "scarcity", "risk", "opportunity", "capability", "curiosity"];
+
+function barWidth(value) {
+  return clamp(value / 1.4, 0, 1) * 100; // scores rarely exceed ~1.4
+}
+
+function formatTerms(terms) {
+  return Object.entries(terms)
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .map(([k, v]) => `${v >= 0 ? "+" : "−"}${k} ${Math.abs(v).toFixed(2)}`)
+    .join(" · ");
+}
+
+function renderMindPanel() {
+  const el = document.getElementById("mind-panel");
+  if (!el || !el.classList.contains("visible")) return;
+  if (!agent.alive) { el.innerHTML = `<div class="mind-head">${agent.name}'s mind has gone quiet.</div>`; return; }
+
+  const pressures = agent.mind.pressures;
+  if (!pressures) return;
+
+  // Score the slate live so the competition breathes between decisions too.
+  const slate = rankProjects(pressures);
+  const activeKind = agent.mind.activeProjectKind;
+  const winner = activeKind === "flee"
+    ? { label: "Flee", reason: "danger" }
+    : slate.find((p) => p.kind === activeKind) || slate[0];
+  const because = winner
+    ? `${winner.label.toLowerCase()} — ${winner.reason || dominantTerm(winner.terms).name} weighs heaviest`
+    : "weighing what matters";
+
+  const dominant = pressures.dominant ? pressures.dominant.kind : null;
+  const meters = PRESSURE_ORDER.map((k) => {
+    const v = clamp(pressures[k] || 0, 0, 1);
+    return `<div class="meter ${k === dominant ? "dominant" : ""}">` +
+      `<span class="lbl">${k}</span><span class="bar"><i style="width:${(v * 100).toFixed(0)}%"></i></span></div>`;
+  }).join("");
+
+  const rows = slate.map((p) => {
+    const cls = `proj${p.kind === activeKind ? " active" : ""}${p.blocked ? " blocked" : ""}`;
+    return `<div class="${cls}">` +
+      `<div class="row"><span class="name">${p.label}</span><span class="pval">${p.value.toFixed(2)}</span></div>` +
+      `<div class="pbar"><i style="width:${barWidth(p.value).toFixed(0)}%"></i></div>` +
+      `<div class="terms">${formatTerms(p.terms)}</div>` +
+      `</div>`;
+  }).join("");
+
+  el.innerHTML =
+    `<div class="mind-head">${agent.name}'s mind</div>` +
+    `<div class="because">${agent.task} · ${because}</div>` +
+    `<div class="section-label">Pressures</div>${meters}` +
+    `<div class="section-label">Projects competing</div>${rows}`;
 }
 
 // ── Hover inspection ────────────────────────────────────────────────────
@@ -250,6 +308,17 @@ function boot() {
   document.getElementById("show-knowledge").addEventListener("click", (e) => {
     view.showAgentKnowledge = !view.showAgentKnowledge;
     e.target.classList.toggle("active", view.showAgentKnowledge);
+    updateHud();
+  });
+  document.getElementById("show-mind").addEventListener("click", (e) => {
+    view.showMind = !view.showMind;
+    e.target.classList.toggle("active", view.showMind);
+    document.getElementById("mind-panel").classList.toggle("visible", view.showMind);
+    // Reading the mind reads best alongside the land he remembers.
+    if (view.showMind && !view.showAgentKnowledge) {
+      view.showAgentKnowledge = true;
+      document.getElementById("show-knowledge").classList.add("active");
+    }
     updateHud();
   });
 

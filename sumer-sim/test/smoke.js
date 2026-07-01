@@ -75,4 +75,17 @@ vm.runInContext(`
   console.log("agent alive:", agent.alive, "| shelter:", agent.shelter ? (agent.shelter.built ? "built" : "in progress") : "none");
   console.log("\\nchronicle (" + events.length + " events, last 25):");
   for (const e of events.slice(-25)) console.log("  d" + e.day, "[" + (e.kind ?? "") + "]", e.text);
+
+  // ── Assertions: the living loop must run and keep him alive ───────────
+  let failures = 0;
+  function assert(cond, msg) { if (!cond) { console.log("  ASSERT FAIL:", msg); failures++; } }
+  assert(agent.alive, "Adapa survived the run");
+  const ranked = rankProjects(assessPressures());
+  assert(Array.isArray(ranked) && ranked.length > 0, "rankProjects yields candidate projects");
+  assert(ranked.every((r) => typeof r.value === "number" && !Number.isNaN(r.value) && r.terms && typeof r.label === "string"),
+    "every candidate carries a numeric score and a term breakdown");
+  assert(agent.mind.projectScores && agent.mind.projectScores.length > 0,
+    "a project slate was recorded for the glass mind");
+  console.log(failures === 0 ? "\\nSMOKE PASS" : "\\nSMOKE FAIL (" + failures + " assertion(s))");
+  if (failures > 0) throw new Error("smoke assertions failed");
 `, ctx, { filename: "harness" });
