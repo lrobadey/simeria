@@ -98,15 +98,14 @@ function updateHud() {
     sun > -0.4 ? "Twilight" : "Deep night";
 
   document.getElementById("clock").innerHTML =
-    `<span class="big">${formatClock(sim.day)}</span> · ${date.month} ${date.day}<br />` +
-    `${seasonForDay(dayOfYear)} · ${phase}<br />` +
-    `${temperatureAt(sim.day).toFixed(0)}°C · river ${riverFlowForDay(dayOfYear).toFixed(1)}×`;
+    `<div><span class="big">${formatClock(sim.day)}</span> · ${date.month} ${date.day}</div>` +
+    `<div>${seasonForDay(dayOfYear)} · ${phase} · ${temperatureAt(sim.day).toFixed(0)}°C · river ${riverFlowForDay(dayOfYear).toFixed(1)}×</div>`;
 
   const counts = populationCounts();
   document.getElementById("eco-panel").innerHTML =
-    `<strong>The valley</strong><br />` +
-    Object.entries(counts).map(([k, n]) => `${SPECIES[k].plural}: ${n}`).join(" · ") +
-    `<br />trees: ${trees.reduce((n, t) => n + (!t.removed && !t.dead ? 1 : 0), 0)}`;
+    `<div><strong>The valley</strong> · ` +
+    Object.entries(counts).map(([k, n]) => `${SPECIES[k].plural}: ${n}`).join(" · ") + `</div>` +
+    `<div>trees: ${trees.reduce((n, t) => n + (!t.removed && !t.dead ? 1 : 0), 0)}</div>`;
 
   const inv = agent.inventory;
   const needs = agent.alive
@@ -117,14 +116,14 @@ function updateHud() {
     ? `food ${inv.food.toFixed(1)} · firewood ${Math.floor(inv.wood)} · hearth ${agent.shelter.fireLit ? "burning" : "cold"}`
     : `food ${inv.food.toFixed(1)} · reeds ${Math.floor(inv.reeds)}/${SHELTER_REEDS_NEEDED} · wood ${Math.floor(inv.wood)}/${SHELTER_WOOD_NEEDED}`;
   const pressure = agent.mind.pressures?.dominant;
-  const pressureLine = pressure ? `<br />pressure: ${pressure.kind} ${(pressure.value * 100).toFixed(0)}%` : "";
+  const pressureLine = pressure ? ` · pressure: ${pressure.kind} ${(pressure.value * 100).toFixed(0)}%` : "";
   const land = agent.mind.memory.land;
   const knowledgeLine = view.showAgentKnowledge && land
-    ? `<br />known land: ${(land.knownCount / (land.width * land.height) * 100).toFixed(1)}%`
+    ? ` · known land: ${(land.knownCount / (land.width * land.height) * 100).toFixed(1)}%`
     : "";
   document.getElementById("agent-panel").innerHTML =
-    `<strong>${agent.name}</strong> — ${agent.task}<br />` +
-    `${needs}<br />` + stock + pressureLine + knowledgeLine;
+    `<div><strong>${agent.name}</strong> — ${agent.task}</div>` +
+    `<div>${needs} · ${stock}${pressureLine}${knowledgeLine}</div>`;
 
   renderMindPanel();
 }

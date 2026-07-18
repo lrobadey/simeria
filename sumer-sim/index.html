@@ -8,90 +8,151 @@
       :root {
         --ink: #ece1cc;
         --ink-dim: #b8a888;
-        --panel: rgba(22, 18, 13, 0.82);
-        --edge: rgba(176, 138, 84, 0.45);
+        --panel: rgba(22, 18, 13, 0.76);
+        --edge: rgba(176, 138, 84, 0.4);
         --accent: #d8a85a;
+        --gutter: clamp(8px, 1vw, 16px);
+        --mind-width: clamp(210px, 16vw, 248px);
+        --chronicle-width: clamp(220px, 18vw, 278px);
       }
 
       * { box-sizing: border-box; }
 
+      html, body { width: 100%; height: 100%; overflow: hidden; }
+
       body {
         margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background: radial-gradient(ellipse at 50% 30%, #2a221a 0%, #161009 70%);
+        background:
+          radial-gradient(ellipse at 50% 36%, rgba(61, 48, 35, 0.8) 0%, rgba(22, 16, 9, 0.96) 68%),
+          #161009;
         color: var(--ink);
         font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
       }
 
       main {
-        position: relative;
-        padding: 28px 0 40px;
-        text-align: center;
+        width: 100%;
+        height: 100dvh;
+        min-width: 0;
+        min-height: 0;
+        padding: var(--gutter);
+        display: grid;
+        grid-template-rows: clamp(68px, 8.5vh, 76px) minmax(0, 1fr) clamp(42px, 6vh, 54px);
+        gap: var(--gutter);
+      }
+
+      .status-bar {
+        min-width: 0;
+        display: grid;
+        grid-template-columns: minmax(150px, 0.6fr) minmax(190px, 0.75fr) minmax(230px, 1fr) minmax(330px, 1.55fr);
+        gap: 1px;
+        border-block: 1px solid var(--edge);
+        background: rgba(255,255,255,0.02);
+        overflow: hidden;
+      }
+
+      .identity {
+        min-width: 0;
+        padding: 7px 13px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        border-right: 1px solid var(--edge);
+        text-align: left;
       }
 
       h1 {
-        margin: 0 0 2px;
-        font-size: 26px;
+        margin: 0;
+        font-size: clamp(18px, 2vw, 27px);
+        line-height: 1;
         font-weight: 500;
-        letter-spacing: 0.35em;
+        letter-spacing: 0.32em;
         text-transform: uppercase;
         color: var(--accent);
-        text-shadow: 0 0 24px rgba(216, 168, 90, 0.35);
+        text-shadow: 0 0 24px rgba(216, 168, 90, 0.3);
       }
 
-      h1 + p {
-        margin: 0 0 16px;
-        font-size: 13px;
+      .identity p {
+        margin: 4px 0 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 10.5px;
         font-style: italic;
         color: var(--ink-dim);
-        letter-spacing: 0.08em;
+        letter-spacing: 0.06em;
+      }
+
+      .panel {
+        min-width: 0;
+        min-height: 0;
+        padding: 8px 11px;
+        background: var(--panel);
+        font-size: clamp(10.5px, 0.82vw, 12.5px);
+        line-height: 1.42;
+        text-align: left;
+        backdrop-filter: blur(4px);
+      }
+
+      #clock, #eco-panel, #agent-panel {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        overflow: hidden;
+      }
+
+      #clock { border-right: 1px solid var(--edge); }
+      #clock .big { font-size: clamp(16px, 1.6vw, 21px); color: var(--accent); letter-spacing: 0.06em; }
+      #eco-panel, #agent-panel { white-space: normal; }
+
+      .workspace {
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 0 minmax(0, 1fr) var(--chronicle-width);
+        gap: var(--gutter);
+        transition: grid-template-columns 260ms ease;
+      }
+
+      .workspace:has(#mind-panel.visible) {
+        grid-template-columns: var(--mind-width) minmax(0, 1fr) var(--chronicle-width);
+      }
+
+      .world-cell {
+        grid-column: 2;
+        min-width: 0;
+        min-height: 0;
+        display: grid;
+        place-items: center;
+        container-type: size;
       }
 
       .stage {
         position: relative;
-        display: inline-block;
-        border-radius: 6px;
-        box-shadow:
-          0 0 0 1px var(--edge),
-          0 0 60px rgba(0, 0, 0, 0.7),
-          inset 0 0 120px rgba(0, 0, 0, 0.25);
+        width: min(100cqw, 100cqh);
+        height: min(100cqw, 100cqh);
+        overflow: hidden;
+        border-radius: 5px;
+        box-shadow: 0 0 0 1px var(--edge), 0 0 48px rgba(0, 0, 0, 0.62);
       }
 
       canvas {
         display: block;
-        border-radius: 6px;
+        width: 100%;
+        height: 100%;
+        border-radius: inherit;
       }
 
-      .panel {
-        position: absolute;
-        padding: 10px 13px;
-        background: var(--panel);
-        border: 1px solid var(--edge);
-        border-radius: 5px;
-        font-size: 12.5px;
-        line-height: 1.55;
-        text-align: left;
-        backdrop-filter: blur(3px);
-        pointer-events: none;
-      }
-
-      #clock { top: 12px; right: 12px; min-width: 170px; }
-      #clock .big { font-size: 19px; color: var(--accent); letter-spacing: 0.06em; }
-
-      #agent-panel { bottom: 12px; left: 12px; min-width: 250px; }
-      #eco-panel { top: 12px; left: 12px; }
-
-      /* ── The glass mind: Adapa's reasoning, made visible ── */
+      /* Adapa's reasoning is a rail beside the world, never over it. */
       #mind-panel {
-        top: 92px;
-        left: 12px;
-        width: 232px;
+        grid-column: 1;
         display: none;
-        pointer-events: auto;       /* so a project row can be hovered */
-        font-size: 11.5px;
-        line-height: 1.4;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        border-block: 1px solid var(--edge);
+        pointer-events: auto;
+        font-size: clamp(10px, 0.76vw, 11.5px);
+        line-height: 1.32;
       }
       #mind-panel.visible { display: block; }
       #mind-panel .mind-head {
@@ -105,14 +166,14 @@
         font-size: 11px;
       }
       #mind-panel .section-label {
-        margin: 9px 0 4px;
+        margin: clamp(5px, 0.8vh, 9px) 0 3px;
         font-size: 9.5px;
         letter-spacing: 0.14em;
         text-transform: uppercase;
         color: var(--ink-dim);
         opacity: 0.7;
       }
-      .meter { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 6px; margin: 2px 0; }
+      .meter { display: grid; grid-template-columns: 60px 1fr; align-items: center; gap: 6px; margin: clamp(1px, 0.28vh, 2px) 0; }
       .meter .lbl { color: var(--ink-dim); }
       .meter .bar { height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden; }
       .meter .bar > i { display: block; height: 100%; background: #7c9b6e; border-radius: 3px; }
@@ -120,8 +181,8 @@
       .meter.dominant .bar > i { background: var(--accent); }
 
       .proj {
-        margin: 3px 0;
-        padding: 3px 5px;
+        margin: clamp(1px, 0.34vh, 3px) 0;
+        padding: clamp(2px, 0.36vh, 3px) 5px;
         border-radius: 3px;
         border-left: 2px solid transparent;
         cursor: default;
@@ -133,36 +194,40 @@
       .proj.active { background: rgba(216,168,90,0.12); border-left-color: var(--accent); }
       .proj.active .name { color: var(--accent); }
       .proj.blocked .name { opacity: 0.5; text-decoration: line-through; }
-      .proj .terms { display: none; margin-top: 4px; color: var(--ink-dim); font-size: 10.5px; }
+      .proj .terms { display: none; margin-top: 3px; color: var(--ink-dim); font-size: 9.5px; }
       .proj:hover { background: rgba(255,255,255,0.06); }
       .proj:hover .terms { display: block; }
 
       #tile-info {
-        bottom: 12px;
-        right: 12px;
-        min-width: 170px;
+        position: absolute;
+        bottom: 8px;
+        right: 8px;
+        max-width: calc(100% - 16px);
         opacity: 0;
         transition: opacity 0.18s;
+        pointer-events: none;
       }
       #tile-info.visible { opacity: 1; }
 
       #chronicle {
-        position: absolute;
-        left: calc(100% + 18px);
-        top: 0;
-        width: 250px;
-        height: 100%;
+        grid-column: 3;
+        min-width: 0;
+        min-height: 0;
         overflow: hidden;
         text-align: left;
-        font-size: 12.5px;
-        line-height: 1.5;
+        font-size: clamp(10.5px, 0.82vw, 12.5px);
+        line-height: 1.42;
         display: flex;
         flex-direction: column;
-        gap: 7px;
+        gap: clamp(4px, 0.65vh, 7px);
+        border-block: 1px solid var(--edge);
       }
 
       #chronicle .entry {
-        padding: 7px 10px;
+        flex: 0 0 auto;
+        min-width: 0;
+        overflow-wrap: anywhere;
+        padding: clamp(4px, 0.65vh, 7px) 9px;
         background: var(--panel);
         border-left: 2px solid var(--edge);
         border-radius: 0 4px 4px 0;
@@ -188,18 +253,23 @@
       }
 
       #controls {
-        margin-top: 14px;
+        min-width: 0;
+        overflow: hidden;
         display: flex;
         justify-content: center;
+        align-items: center;
+        flex-wrap: nowrap;
         gap: 8px;
         font-size: 12px;
+        border-top: 1px solid var(--edge);
       }
 
       #controls button {
         font-family: inherit;
         font-size: 12px;
         letter-spacing: 0.08em;
-        padding: 6px 14px;
+        flex: 0 0 auto;
+        padding: 5px clamp(8px, 1vw, 14px);
         background: var(--panel);
         color: var(--ink-dim);
         border: 1px solid var(--edge);
@@ -215,23 +285,71 @@
         color: var(--ink-dim);
         font-style: italic;
         opacity: 0.7;
-        margin-left: 8px;
+        margin-left: 6px;
+        white-space: nowrap;
+      }
+
+      @media (max-width: 1120px) {
+        :root { --mind-width: 202px; --chronicle-width: 210px; }
+        .status-bar { grid-template-columns: 140px 175px minmax(190px, 0.8fr) minmax(280px, 1.25fr); }
+        #clock div:last-child { display: none; }
+        #controls { gap: 5px; }
+        #controls .hint { display: none; }
+      }
+
+      @media (max-width: 860px) {
+        :root { --mind-width: 190px; --chronicle-width: 190px; --gutter: 7px; }
+        main { grid-template-rows: 54px minmax(0, 1fr) 42px; }
+        .identity p, #eco-panel { display: none; }
+        .status-bar { grid-template-columns: 130px 170px minmax(240px, 1fr); }
+        #clock div:last-child { display: none; }
+        #agent-panel div:last-child {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        #controls button { padding-inline: 7px; font-size: 10.5px; }
+      }
+
+      @media (max-height: 680px) {
+        main { grid-template-rows: 48px minmax(0, 1fr) 38px; }
+        .identity p, #eco-panel br, #agent-panel br { display: none; }
+        #clock div:last-child { display: none; }
+        #eco-panel div:last-child { display: none; }
+        #agent-panel div:last-child {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .panel { padding-block: 5px; }
+        #mind-panel .because { font-size: 9.5px; }
+        .proj .pbar { display: none; }
+        #chronicle .entry:nth-child(n+7) { display: none; }
+        #controls button { padding-block: 3px; }
       }
     </style>
   </head>
   <body>
     <main>
-      <h1>Sumer</h1>
-      <p>first light on the floodplain · one hour is one day</p>
-
-      <div class="stage">
-        <canvas id="world"></canvas>
+      <header class="status-bar">
+        <div class="identity">
+          <h1>Sumer</h1>
+          <p>first light on the floodplain · one hour is one day</p>
+        </div>
         <div class="panel" id="clock"></div>
         <div class="panel" id="eco-panel"></div>
         <div class="panel" id="agent-panel"></div>
-        <div class="panel" id="mind-panel"></div>
-        <div class="panel" id="tile-info"></div>
-        <div id="chronicle"></div>
+      </header>
+
+      <div class="workspace">
+        <aside class="panel" id="mind-panel" aria-label="Adapa's mind"></aside>
+        <section class="world-cell" aria-label="The floodplain">
+          <div class="stage">
+            <canvas id="world"></canvas>
+            <div class="panel" id="tile-info"></div>
+          </div>
+        </section>
+        <aside id="chronicle" aria-label="Chronicle"></aside>
       </div>
 
       <div id="controls">
