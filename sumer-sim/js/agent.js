@@ -13,6 +13,12 @@ const HUNGER_MEAL_THRESHOLD = 0.55;
 const HUNGER_URGENT_THRESHOLD = 0.7;
 const LAND_SIGHT_RADIUS = 18;
 const LAND_MEMORY_FADE_DAYS = 45;
+const INVENTORY_CAPACITY = 14;
+const RESOURCE_BULK = Object.freeze({
+  food: 1,
+  reeds: 0.15,
+  wood: 0.6,
+});
 
 function createAgentMind() {
   return {
@@ -112,6 +118,30 @@ const agent = {
   avoid: [],           // places that proved unreachable: {x, y, until}
   mind: createAgentMind(),
 };
+
+function inventoryLoad(inventory = agent.inventory) {
+  let load = 0;
+  for (const [kind, bulk] of Object.entries(RESOURCE_BULK)) {
+    load += Math.max(0, inventory[kind] || 0) * bulk;
+  }
+  return load;
+}
+
+function inventorySpaceFor(kind, inventory = agent.inventory) {
+  const bulk = RESOURCE_BULK[kind];
+  if (!bulk) return 0;
+  return Math.max(0, (INVENTORY_CAPACITY - inventoryLoad(inventory)) / bulk);
+}
+
+function addToInventory(kind, amount) {
+  const accepted = Math.min(Math.max(0, amount), inventorySpaceFor(kind));
+  agent.inventory[kind] = (agent.inventory[kind] || 0) + accepted;
+  return accepted;
+}
+
+function inventoryIsFull() {
+  return inventoryLoad() >= INVENTORY_CAPACITY - 0.001;
+}
 
 function currentAgentDay() {
   return typeof sim === "undefined" ? 0 : sim.day;
@@ -1252,10 +1282,10 @@ function updateAgent(dtDays) {
       const workRate = dtDays * 24; // hours of work
       if (f.kind === "dates") {
         if (f.tree.removed || f.tree.dead || f.tree.fruit <= 0.03) { decideAgent(); break; }
-        const picked = Math.min(f.tree.fruit, workRate * 0.35);
+        const picked = Math.min(f.tree.fruit, workRate * 0.35, inventorySpaceFor("food") / 5);
         f.tree.fruit -= picked;
-        agent.inventory.food += picked * 5; // dates are calorie-dense
-        if (agent.inventory.food > 4 || f.tree.fruit <= 0.03) {
+        addToInventory("food", picked * 5); // dates are calorie-dense
+        if (agent.inventory.food > 4 || f.tree.fruit <= 0.03 || inventoryIsFull()) {
           agent.task = "Picked dates";
           decideAgent();
         }
@@ -1263,10 +1293,11 @@ function updateAgent(dtDays) {
         const tile = f.tile;
         const field = f.kind === "rhizomes" ? "reeds" : "grass";
         if (tile[field] <= 0.05) { decideAgent(); break; }
-        const dug = Math.min(tile[field], workRate * 0.3);
+        const foodPerUnit = f.kind === "rhizomes" ? 1.6 : 1.1;
+        const dug = Math.min(tile[field], workRate * 0.3, inventorySpaceFor("food") / foodPerUnit);
         tile[field] -= dug;
-        agent.inventory.food += dug * (f.kind === "rhizomes" ? 1.6 : 1.1);
-        if (agent.inventory.food > 3) decideAgent();
+        addToInventory("food", dug * foodPerUnit);
+        if (agent.inventory.food > 3 || inventoryIsFull()) decideAgent();
       }
       break;
     }
@@ -1275,12 +1306,14 @@ function updateAgent(dtDays) {
       const tile = getTileF(agent.x, agent.y);
       if (!tile || tile.reeds <= 0.06) { decideAgent(); break; }
       rememberResource("reeds", tile, tile.reeds);
-      const cut = Math.min(tile.reeds, dtDays * 24 * 0.25);
+      const cut = Math.min(tile.reeds, dtDays * 24 * 0.25, inventorySpaceFor("reeds") / 28);
       tile.reeds -= cut;
-      agent.inventory.reeds += cut * 28; // a tile's worth of reeds is many bundles
+      addToInventory("reeds", cut * 28); // a tile's worth of reeds is many bundles
       agent.task = "Cutting reeds";
       if (agent.inventory.reeds >= SHELTER_REEDS_NEEDED) {
         logEvent(`${agent.name} has cut enough reeds for a house.`, "agent");
+      }
+      if (agent.inventory.reeds >= SHELTER_REEDS_NEEDED || inventoryIsFull()) {
         decideAgent();
       }
       break;
@@ -1291,17 +1324,19 @@ function updateAgent(dtDays) {
       if (!tree || tree.removed) { agent.targetTree = null; decideAgent(); break; }
       rememberResource("wood", tree, tree.dead ? tree.wood * 2 : 1);
       const rate = tree.dead ? 1.4 : 0.45; // deadwood breaks free easily
-      const take = dtDays * 24 * rate;
+      const take = Math.min(dtDays * 24 * rate, inventorySpaceFor("wood"));
       if (tree.dead) {
         const got = Math.min(tree.wood, take);
         tree.wood -= got;
-        agent.inventory.wood += got;
+        addToInventory("wood", got);
         if (tree.wood <= 0) tree.removed = true;
       } else {
-        agent.inventory.wood += take;
+        addToInventory("wood", take);
       }
       agent.task = "Gathering wood";
-      if (agent.inventory.wood >= SHELTER_WOOD_NEEDED || (!agent.shelter && agent.inventory.wood >= SHELTER_WOOD_NEEDED)) {
+      if (inventoryIsFull()) {
+        decideAgent();
+      } else if (agent.inventory.wood >= SHELTER_WOOD_NEEDED || (!agent.shelter && agent.inventory.wood >= SHELTER_WOOD_NEEDED)) {
         decideAgent();
       } else if (agent.shelter && agent.shelter.built && agent.inventory.wood >= 6) {
         decideAgent();
@@ -1350,11 +1385,11 @@ function updateAgent(dtDays) {
       const tile = getTileF(agent.x, agent.y);
       if (!tile || !tile.fish || tile.fish <= 0.08) { decideAgent(); break; }
       rememberResource("forage", { x: agent.x, y: agent.y }, tile.fish);
-      const got = Math.min(tile.fish, dtDays * 24 * 0.25);
+      const got = Math.min(tile.fish, dtDays * 24 * 0.25, inventorySpaceFor("food") / 2.2);
       tile.fish -= got;
-      agent.inventory.food += got * 2.2; // fish are calorie-rich
+      addToInventory("food", got * 2.2); // fish are calorie-rich
       agent.task = "Fishing the shallows";
-      if (agent.inventory.food > 4 || tile.fish <= 0.08) decideAgent();
+      if (agent.inventory.food > 4 || tile.fish <= 0.08 || inventoryIsFull()) decideAgent();
       break;
     }
 

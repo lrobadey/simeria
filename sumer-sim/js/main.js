@@ -115,6 +115,7 @@ function updateHud() {
   const stock = agent.shelter && agent.shelter.built
     ? `food ${inv.food.toFixed(1)} · firewood ${Math.floor(inv.wood)} · hearth ${agent.shelter.fireLit ? "burning" : "cold"}`
     : `food ${inv.food.toFixed(1)} · reeds ${Math.floor(inv.reeds)}/${SHELTER_REEDS_NEEDED} · wood ${Math.floor(inv.wood)}/${SHELTER_WOOD_NEEDED}`;
+  const carried = ` · load ${inventoryLoad(inv).toFixed(1)}/${INVENTORY_CAPACITY}`;
   const pressure = agent.mind.pressures?.dominant;
   const pressureLine = pressure ? ` · pressure: ${pressure.kind} ${(pressure.value * 100).toFixed(0)}%` : "";
   const land = agent.mind.memory.land;
@@ -123,7 +124,7 @@ function updateHud() {
     : "";
   document.getElementById("agent-panel").innerHTML =
     `<div><strong>${agent.name}</strong> — ${agent.task}</div>` +
-    `<div>${needs} · ${stock}${pressureLine}${knowledgeLine}</div>`;
+    `<div>${needs} · ${stock}${carried}${pressureLine}${knowledgeLine}</div>`;
 
   renderMindPanel();
 }
